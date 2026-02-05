@@ -1,0 +1,19 @@
+# Build artifacts
+obj/
+bin/
+
+# Editor swap / backup files
+*.swp
+*~
+*.bak
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.dSYM/
+
+# Test files
+*.txt
