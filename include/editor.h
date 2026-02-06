@@ -9,14 +9,21 @@
 #ifndef OPUSEDIT_EDITOR_H
 #define OPUSEDIT_EDITOR_H
 
+#include <limits.h>
 #include <stddef.h>
 #include <termios.h>
 #include <time.h>
+#include "undo.h"
 
 /* ── Build-wide constants ─────────────────────────────────── */
-#define OPUSEDIT_VERSION   "1.0.0"
+#define OPUSEDIT_VERSION   "1.1.0"
 #define OPUSEDIT_TAB_STOP  4
 #define OPUSEDIT_QUIT_TIMES 2
+/*
+ * Maximum row size we can safely store without overflowing render sizes.
+ * Worst-case render expansion is every char = tab (size * TAB_STOP).
+ */
+#define OPUSEDIT_MAX_ROW_SIZE ((INT_MAX - 1) / OPUSEDIT_TAB_STOP)
 
 /* ── Syntax highlight token types ─────────────────────────── */
 enum editor_highlight {
@@ -89,6 +96,10 @@ typedef struct editor_config {
     time_t statusmsg_time;
     /* Syntax */
     editor_syntax *syntax;
+    /* Undo/redo */
+    undo_stack undo;
+    undo_stack redo;
+    int        undo_recording;   /* 1 = normal, 0 = replaying undo/redo */
     /* Original terminal state for restoration */
     struct termios orig_termios;
 } editor_config;

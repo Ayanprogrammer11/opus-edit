@@ -6,10 +6,12 @@
 #include "terminal.h"
 #include "input.h"
 #include "output.h"
+#include "undo.h"
 
 #include <ctype.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -28,18 +30,28 @@ void ab_init(abuf *ab)
 
 void ab_append(abuf *ab, const char *s, int len)
 {
-    if (len <= 0) return;
-    if (ab->len + len > ab->cap) {
+    if (!s || len <= 0) return;
+    if (ab->len < 0 || ab->cap < 0) return;
+    if (len > INT_MAX - ab->len) return;
+
+    int needed = ab->len + len;
+    if (needed > ab->cap) {
         int newcap = (ab->cap == 0) ? 256 : ab->cap;
-        while (newcap < ab->len + len)
+        while (newcap < needed) {
+            if (newcap > INT_MAX / 2) {
+                newcap = needed;
+                break;
+            }
             newcap *= 2;
+        }
+        if (newcap < needed) return;
         char *p = realloc(ab->b, (size_t)newcap);
         if (!p) return;           /* OOM: silently drop */
         ab->b   = p;
         ab->cap = newcap;
     }
     memcpy(ab->b + ab->len, s, (size_t)len);
-    ab->len += len;
+    ab->len = needed;
 }
 
 void ab_free(abuf *ab)
@@ -97,6 +109,11 @@ char *editor_prompt(const char *prompt, void (*callback)(const char *, int))
             }
         } else if (!iscntrl(c) && c < 128) {
             if (buflen + 1 >= bufsize) {
+                if (bufsize > SIZE_MAX / 2) {
+                    editor_set_status_message("Input too long.");
+                    free(buf);
+                    return NULL;
+                }
                 bufsize *= 2;
                 char *tmp = realloc(buf, bufsize);
                 if (!tmp) { free(buf); return NULL; }
@@ -127,6 +144,10 @@ void editor_init(void)
     E.statusmsg_time  = 0;
     E.syntax   = NULL;
 
+    undo_stack_init(&E.undo);
+    undo_stack_init(&E.redo);
+    E.undo_recording = 1;
+
     if (terminal_get_window_size(&E.screenrows, &E.screencols) == -1) {
         /* Fallback – very conservative */
         E.screenrows = 24;
@@ -145,6 +166,9 @@ void editor_cleanup(void)
     }
     free(E.row);
     free(E.filename);
+
+    undo_stack_free(&E.undo);
+    undo_stack_free(&E.redo);
 
     E.row      = NULL;
     E.filename = NULL;

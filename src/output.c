@@ -70,12 +70,60 @@ static int is_separator(int c)
         || strchr(",.()+-/*=~%<>[];:!&|^{}#?", c) != NULL;
 }
 
+/* ── Append sanitized text (no control chars) ─────────────── */
+
+static void ab_append_sanitized(abuf *ab, const char *s, int len)
+{
+    int start = 0;
+    for (int i = 0; i < len; i++) {
+        if (iscntrl((unsigned char)s[i])) {
+            /* Flush preceding clean run */
+            if (i > start)
+                ab_append(ab, &s[start], i - start);
+            ab_append(ab, "?", 1);
+            start = i + 1;
+        }
+    }
+    /* Flush trailing clean run */
+    if (len > start)
+        ab_append(ab, &s[start], len - start);
+}
+
 /* ── Syntax highlighting per row ──────────────────────────── */
 
-void output_update_syntax(erow *row)
+static void output_update_syntax_internal(erow *row, int propagate)
 {
-    row->hl = realloc(row->hl, (size_t)row->rsize);
-    if (!row->hl) return;
+    if (!row->render) {
+        free(row->hl);
+        row->hl = NULL;
+        row->hl_open_comment = 0;
+        return;
+    }
+
+    if (row->rsize == 0) {
+        free(row->hl);
+        row->hl = NULL;
+        int in_comment = (E.syntax && row->idx > 0
+                          && E.row[row->idx - 1].hl_open_comment);
+        int changed = (row->hl_open_comment != in_comment);
+        row->hl_open_comment = in_comment;
+        if (propagate && changed && row->idx + 1 < E.numrows) {
+            for (int next_idx = row->idx + 1; next_idx < E.numrows; next_idx++) {
+                int prev = E.row[next_idx].hl_open_comment;
+                output_update_syntax_internal(&E.row[next_idx], 0);
+                if (E.row[next_idx].hl_open_comment == prev) break;
+            }
+        }
+        return;
+    }
+
+    unsigned char *tmp = realloc(row->hl, (size_t)row->rsize);
+    if (!tmp) {
+        /* realloc failed — keep old hl buffer (stale but safe).
+         * If row->hl is NULL we simply can't highlight this row. */
+        return;
+    }
+    row->hl = tmp;
     memset(row->hl, HL_NORMAL, (size_t)row->rsize);
 
     if (!E.syntax) return;
@@ -99,10 +147,13 @@ void output_update_syntax(erow *row)
         int   prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL;
         (void)prev_hl;
 
+        int remaining = row->rsize - i;
+
         /* ── Multi-line comment end ───────────────────────── */
         if (in_comment) {
             row->hl[i] = HL_MLCOMMENT;
-            if (mce_len > 0 && !strncmp(&row->render[i], mce, (size_t)mce_len)) {
+            if (mce_len > 0 && remaining >= mce_len
+                && !strncmp(&row->render[i], mce, (size_t)mce_len)) {
                 memset(&row->hl[i], HL_MLCOMMENT, (size_t)mce_len);
                 i += mce_len;
                 in_comment = 0;
@@ -130,13 +181,15 @@ void output_update_syntax(erow *row)
         }
 
         /* ── Single-line comment ──────────────────────────── */
-        if (scs_len > 0 && !strncmp(&row->render[i], scs, (size_t)scs_len)) {
+        if (scs_len > 0 && remaining >= scs_len
+            && !strncmp(&row->render[i], scs, (size_t)scs_len)) {
             memset(&row->hl[i], HL_COMMENT, (size_t)(row->rsize - i));
             break;
         }
 
         /* ── Multi-line comment start ─────────────────────── */
-        if (mcs_len > 0 && !strncmp(&row->render[i], mcs, (size_t)mcs_len)) {
+        if (mcs_len > 0 && remaining >= mcs_len
+            && !strncmp(&row->render[i], mcs, (size_t)mcs_len)) {
             memset(&row->hl[i], HL_MLCOMMENT, (size_t)mcs_len);
             i += mcs_len;
             in_comment = 1;
@@ -174,7 +227,8 @@ void output_update_syntax(erow *row)
                 int kw2  = (keywords[k][klen - 1] == '|');
                 if (kw2) klen--;
 
-                if (!strncmp(&row->render[i], keywords[k], (size_t)klen)
+                if (i + klen <= row->rsize
+                    && !strncmp(&row->render[i], keywords[k], (size_t)klen)
                     && is_separator(row->render[i + klen])) {
                     memset(&row->hl[i],
                            kw2 ? HL_KEYWORD2 : HL_KEYWORD1,
@@ -197,8 +251,19 @@ void output_update_syntax(erow *row)
     int changed = (row->hl_open_comment != in_comment);
     row->hl_open_comment = in_comment;
     /* Propagate change to following rows */
-    if (changed && row->idx + 1 < E.numrows)
-        output_update_syntax(&E.row[row->idx + 1]);
+    if (propagate && changed && row->idx + 1 < E.numrows) {
+        for (int next_idx = row->idx + 1; next_idx < E.numrows; next_idx++) {
+            int prev = E.row[next_idx].hl_open_comment;
+            output_update_syntax_internal(&E.row[next_idx], 0);
+            if (E.row[next_idx].hl_open_comment == prev) break;
+        }
+    }
+}
+
+void output_update_syntax(erow *row)
+{
+    if (!row) return;
+    output_update_syntax_internal(row, 1);
 }
 
 /* ── Highlight → ANSI color ───────────────────────────────── */
@@ -295,12 +360,18 @@ static void output_draw_rows(abuf *ab)
             }
         } else {
             /* Render a file row with syntax highlighting */
-            int len = E.row[filerow].rsize - E.coloff;
+            int rsize = E.row[filerow].rsize;
+            const char *render = E.row[filerow].render;
+            unsigned char *rowhl = E.row[filerow].hl;
+            int coloff = E.coloff;
+            if (coloff > rsize) coloff = rsize;
+
+            int len = rsize - coloff;
             if (len < 0) len = 0;
             if (len > E.screencols) len = E.screencols;
 
-            const char    *c  = &E.row[filerow].render[E.coloff];
-            unsigned char *hl = &E.row[filerow].hl[E.coloff];
+            const char    *c  = render ? &render[coloff] : "";
+            unsigned char *hl = (render && rowhl) ? &rowhl[coloff] : NULL;
 
             int current_color = -1;
             for (int j = 0; j < len; j++) {
@@ -316,7 +387,7 @@ static void output_draw_rows(abuf *ab)
                                             "\x1b[%dm", current_color);
                         ab_append(ab, cbuf, clen);
                     }
-                } else if (hl[j] == HL_NORMAL) {
+                } else if (!hl || hl[j] == HL_NORMAL) {
                     if (current_color != -1) {
                         ab_append(ab, "\x1b[39m", 5);
                         current_color = -1;
@@ -358,11 +429,11 @@ static void output_draw_status_bar(abuf *ab)
                         E.cy + 1, E.numrows, E.cx + 1);
 
     if (len > E.screencols) len = E.screencols;
-    ab_append(ab, status, len);
+    ab_append_sanitized(ab, status, len);
 
     while (len < E.screencols) {
         if (E.screencols - len == rlen) {
-            ab_append(ab, rstatus, rlen);
+            ab_append_sanitized(ab, rstatus, rlen);
             break;
         }
         ab_append(ab, " ", 1);
@@ -381,7 +452,7 @@ static void output_draw_message_bar(abuf *ab)
     int msglen = (int)strlen(E.statusmsg);
     if (msglen > E.screencols) msglen = E.screencols;
     if (msglen && time(NULL) - E.statusmsg_time < 5)
-        ab_append(ab, E.statusmsg, msglen);
+        ab_append_sanitized(ab, E.statusmsg, msglen);
 }
 
 /* ── Full screen refresh ──────────────────────────────────── */

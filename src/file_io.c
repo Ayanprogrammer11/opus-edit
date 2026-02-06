@@ -25,6 +25,16 @@
 
 /* ── Open file ────────────────────────────────────────────── */
 
+static void file_clear_rows(void)
+{
+    for (int i = 0; i < E.numrows; i++)
+        buffer_free_row(&E.row[i]);
+    free(E.row);
+    E.row = NULL;
+    E.numrows = 0;
+    E.dirty = 0;
+}
+
 void file_open(const char *filename)
 {
     free(E.filename);
@@ -48,6 +58,14 @@ void file_open(const char *filename)
         while (linelen > 0 &&
                (line[linelen - 1] == '\n' || line[linelen - 1] == '\r'))
             linelen--;
+
+        if (linelen > (ssize_t)OPUSEDIT_MAX_ROW_SIZE) {
+            editor_set_status_message("Open failed: line too long.");
+            free(line);
+            fclose(fp);
+            file_clear_rows();
+            return;
+        }
 
         buffer_insert_row(E.numrows, line, (size_t)linelen);
     }
@@ -73,7 +91,11 @@ void file_save(void)
     int len;
     char *buf = buffer_rows_to_string(&len);
     if (!buf) {
-        editor_set_status_message("Save failed: out of memory.");
+        if (len < 0) {
+            editor_set_status_message("Save failed: file too large.");
+        } else {
+            editor_set_status_message("Save failed: out of memory.");
+        }
         return;
     }
 

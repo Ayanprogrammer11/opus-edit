@@ -28,4 +28,13 @@ int terminal_get_window_size(int *rows, int *cols);
  */
 void terminal_install_signal_handlers(void);
 
+/* Return nonzero if a SIGTERM has been received. */
+int terminal_exit_requested(void);
+
+/*
+ * Apply any pending resize signal by updating editor dimensions.
+ * Returns nonzero if a resize was applied.
+ */
+int terminal_apply_pending_resize(void);
+
 #endif /* OPUSEDIT_TERMINAL_H */

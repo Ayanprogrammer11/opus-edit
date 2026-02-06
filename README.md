@@ -10,6 +10,7 @@ A lightweight, terminal-based text editor written in pure C. No external UI libr
 
 - **Zero dependencies** — no ncurses, no third-party libraries
 - **Syntax highlighting** for C/C++ (keywords, types, strings, numbers, comments)
+- **Undo/redo** with intelligent grouping (`Ctrl-Z` / `Ctrl-Y`)
 - **Incremental search** with live highlighting and arrow-key cycling
 - **Flicker-free rendering** via double-buffered output (single `write()` per refresh)
 - **Full cursor navigation** — arrows, Home/End, Page Up/Down
@@ -45,6 +46,8 @@ The binary is output to `bin/opusedit`.
 | `Ctrl-S` | Save (prompts for filename if new) |
 | `Ctrl-Q` | Quit (press twice to force-quit with unsaved changes) |
 | `Ctrl-F` | Incremental search |
+| `Ctrl-Z` | Undo (groups consecutive typing into chunks) |
+| `Ctrl-Y` | Redo |
 | `Arrow keys` | Move cursor |
 | `Home` / `End` | Jump to beginning / end of line |
 | `Page Up` / `Page Down` | Scroll by screenful |
@@ -75,7 +78,8 @@ opus-edit/
 │   ├── buffer.h        # Dynamic row array, text mutation operations
 │   ├── output.h        # Double-buffered rendering, syntax highlighting
 │   ├── file_io.h       # File read/write with error handling
-│   └── find.h          # Incremental search
+│   ├── find.h          # Incremental search
+│   └── undo.h          # Undo/redo operation types and API
 └── src/
     ├── main.c           # Entry point and main loop
     ├── editor.c         # Global state, append-buffer, prompt, lifecycle
@@ -84,7 +88,8 @@ opus-edit/
     ├── buffer.c         # Row operations, tab expansion, serialization
     ├── output.c         # Rendering, status bar, C syntax highlighting
     ├── file_io.c        # Safe file open/save with fsync
-    └── find.c           # Incremental search with match highlighting
+    ├── find.c           # Incremental search with match highlighting
+    └── undo.c           # Undo/redo stack with auto-grouping
 ```
 
 ## Architecture
@@ -97,6 +102,7 @@ opus-edit/
 | **output** | `abuf` double-buffering, row rendering with ANSI colors, status & message bars |
 | **file_io** | `fopen` for reading, `open`+`write`+`fsync` for atomic-ish saves |
 | **find** | Prompt-driven incremental search, highlight overlay, bidirectional cycling |
+| **undo** | Operation stack with auto-grouping, inverse computation, cursor restoration |
 
 ## Cross-Platform Notes
 

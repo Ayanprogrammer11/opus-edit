@@ -6,8 +6,10 @@
 #include "editor.h"
 #include "buffer.h"
 #include "output.h"
+#include "terminal.h"
 #include "find.h"
 #include "file_io.h"
+#include "undo.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -21,8 +23,29 @@ int input_read_key(void)
     int nread;
     char c;
 
-    while ((nread = (int)read(STDIN_FILENO, &c, 1)) != 1) {
-        if (nread == -1 && errno != EAGAIN) {
+    for (;;) {
+        if (terminal_exit_requested()) {
+            editor_cleanup();
+            exit(0);
+        }
+
+        nread = (int)read(STDIN_FILENO, &c, 1);
+        if (nread == 1) {
+            if (terminal_exit_requested()) {
+                editor_cleanup();
+                exit(0);
+            }
+            break;
+        }
+
+        if (nread == 0 || (nread == -1 && (errno == EAGAIN || errno == EINTR))) {
+            if (terminal_apply_pending_resize()) {
+                output_refresh_screen();
+            }
+            continue;
+        }
+
+        if (nread == -1) {
             /* Fatal read error */
             perror("read");
             exit(1);
@@ -168,6 +191,16 @@ void input_process_keypress(void)
         /* ── Find (Ctrl-F) ─────────────────────────────────── */
         case CTRL_KEY('f'):
             find();
+            break;
+
+        /* ── Undo (Ctrl-Z) ─────────────────────────────────── */
+        case CTRL_KEY('z'):
+            undo_perform_undo();
+            break;
+
+        /* ── Redo (Ctrl-Y) ─────────────────────────────────── */
+        case CTRL_KEY('y'):
+            undo_perform_redo();
             break;
 
         /* ── Home / End ────────────────────────────────────── */

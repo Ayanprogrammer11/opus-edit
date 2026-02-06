@@ -27,8 +27,10 @@ static void restore_highlight(void)
 {
     if (saved_hl) {
         if (saved_hl_line >= 0 && saved_hl_line < E.numrows) {
-            memcpy(E.row[saved_hl_line].hl, saved_hl,
-                   (size_t)E.row[saved_hl_line].rsize);
+            if (E.row[saved_hl_line].hl) {
+                memcpy(E.row[saved_hl_line].hl, saved_hl,
+                       (size_t)E.row[saved_hl_line].rsize);
+            }
         }
         free(saved_hl);
         saved_hl      = NULL;
@@ -68,6 +70,7 @@ static void find_callback(const char *query, int key)
         if (current == E.numrows)  current = 0;
 
         erow *row = &E.row[current];
+        if (!row->render) continue;
         char *match = strstr(row->render, query);
         if (match) {
             last_match = current;
@@ -78,15 +81,19 @@ static void find_callback(const char *query, int key)
 
             /* Save and override highlight for the matching region */
             saved_hl_line = current;
-            saved_hl = malloc((size_t)row->rsize);
-            if (saved_hl) {
-                memcpy(saved_hl, row->hl, (size_t)row->rsize);
+            if (row->hl) {
+                saved_hl = malloc((size_t)row->rsize);
+                if (saved_hl) {
+                    memcpy(saved_hl, row->hl, (size_t)row->rsize);
+                }
             }
-            int qlen = (int)strlen(query);
-            int mstart = (int)(match - row->render);
-            memset(&row->hl[mstart], HL_MATCH,
-                   qlen < row->rsize - mstart ? (size_t)qlen
-                                              : (size_t)(row->rsize - mstart));
+            if (row->hl) {
+                int qlen = (int)strlen(query);
+                int mstart = (int)(match - row->render);
+                memset(&row->hl[mstart], HL_MATCH,
+                       qlen < row->rsize - mstart ? (size_t)qlen
+                                                  : (size_t)(row->rsize - mstart));
+            }
             break;
         }
     }

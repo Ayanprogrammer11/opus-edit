@@ -37,8 +37,9 @@ void buffer_row_insert_char(erow *row, int at, int c);
 /* Delete the character at column `at` in `row`. */
 void buffer_row_delete_char(erow *row, int at);
 
-/* Append string `s` (length `len`) to the end of `row`. */
-void buffer_row_append_string(erow *row, const char *s, size_t len);
+/* Append string `s` (length `len`) to the end of `row`.
+ * Returns 1 on success, 0 on failure. */
+int buffer_row_append_string(erow *row, const char *s, size_t len);
 
 /* ── Editor-level text operations ─────────────────────────── */
 
@@ -62,6 +63,7 @@ int buffer_rx_to_cx(const erow *row, int rx);
 /*
  * Serialise all rows into a single heap-allocated string.
  * Caller must free(). `*buflen` receives total byte count.
+ * Returns NULL and sets `*buflen` to -1 on size overflow.
  */
 char *buffer_rows_to_string(int *buflen);
 

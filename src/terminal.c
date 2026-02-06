@@ -4,7 +4,6 @@
 
 #include "terminal.h"
 #include "editor.h"
-#include "output.h"
 
 #include <errno.h>
 #include <signal.h>
@@ -14,6 +13,11 @@
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
+
+/* ── Signal state ─────────────────────────────────────────── */
+
+static volatile sig_atomic_t pending_resize = 0;
+static volatile sig_atomic_t pending_exit   = 0;
 
 /* ── Raw mode ─────────────────────────────────────────────── */
 
@@ -99,7 +103,23 @@ static int terminal_get_cursor_position(int *rows, int *cols)
     buf[i] = '\0';
 
     if (buf[0] != '\x1b' || buf[1] != '[') return -1;
-    if (sscanf(&buf[2], "%d;%d", rows, cols) != 2) return -1;
+
+    const char *p = &buf[2];
+    char *end = NULL;
+    errno = 0;
+    unsigned long r = strtoul(p, &end, 10);
+    if (errno || end == p || *end != ';') return -1;
+
+    p = end + 1;
+    errno = 0;
+    unsigned long c = strtoul(p, &end, 10);
+    if (errno || end == p || *end != '\0') return -1;
+
+    if (r == 0 || c == 0 || r > (unsigned long)INT_MAX || c > (unsigned long)INT_MAX)
+        return -1;
+
+    *rows = (int)r;
+    *cols = (int)c;
     return 0;
 }
 
@@ -126,22 +146,36 @@ int terminal_get_window_size(int *rows, int *cols)
 static void handle_sigwinch(int sig)
 {
     (void)sig;
-    if (terminal_get_window_size(&E.screenrows, &E.screencols) == -1)
-        return;
-    E.screenrows -= 2; /* status + message bars */
-
-    /* Clamp cursor position */
-    if (E.cy >= E.numrows) E.cy = E.numrows ? E.numrows - 1 : 0;
-
-    output_refresh_screen();
+    pending_resize = 1;
 }
 
 static void handle_sigterm(int sig)
 {
     (void)sig;
-    terminal_disable_raw_mode();
-    editor_cleanup();
-    _exit(0);
+    pending_exit = 1;
+}
+
+int terminal_exit_requested(void)
+{
+    return pending_exit != 0;
+}
+
+int terminal_apply_pending_resize(void)
+{
+    if (!pending_resize) return 0;
+
+    int rows, cols;
+    if (terminal_get_window_size(&rows, &cols) == -1)
+        return 0;
+
+    pending_resize = 0;
+    E.screenrows = (rows > 2) ? (rows - 2) : 1; /* status + message bars */
+    E.screencols = cols;
+
+    /* Clamp cursor position */
+    if (E.cy >= E.numrows) E.cy = E.numrows ? E.numrows - 1 : 0;
+
+    return 1;
 }
 
 void terminal_install_signal_handlers(void)
