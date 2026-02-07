@@ -10,6 +10,7 @@
 #include "buffer.h"
 #include "file_io.h"
 #include "find.h"
+#include "git.h"
 
 #include <ctype.h>
 #include <limits.h>
@@ -353,7 +354,8 @@ void editor_command_prompt(void)
     } else if (strcasecmp(cmdline, "set") == 0) {
         if (!arg || !*arg) {
             editor_set_status_message(
-                "Usage: :set number|nonumber|autoindent|noautoindent");
+                "Usage: :set number|nonumber|autoindent|noautoindent|"
+                "gitgutter|nogitgutter");
         } else if (strcasecmp(arg, "number") == 0 ||
                    strcasecmp(arg, "nu") == 0) {
             E.show_line_numbers = 1;
@@ -370,6 +372,14 @@ void editor_command_prompt(void)
                    strcasecmp(arg, "noai") == 0) {
             E.auto_indent = 0;
             editor_set_status_message("Auto-indent off.");
+        } else if (strcasecmp(arg, "gitgutter") == 0 ||
+                   strcasecmp(arg, "gg") == 0) {
+            E.show_git_gutter = 1;
+            editor_set_status_message("Git gutter on.");
+        } else if (strcasecmp(arg, "nogitgutter") == 0 ||
+                   strcasecmp(arg, "nogg") == 0) {
+            E.show_git_gutter = 0;
+            editor_set_status_message("Git gutter off.");
         } else {
             editor_set_status_message("Unknown option: %s", arg);
         }
@@ -410,6 +420,17 @@ static void editor_buffer_init(editor_buffer *buf)
     buf->dirty = 0;
     buf->filename = NULL;
     buf->syntax = NULL;
+    buf->show_git_gutter = 1;
+    buf->git_available = 0;
+    buf->git_tracked = 0;
+    buf->git_signs_dirty = 1;
+    buf->git_root = NULL;
+    buf->git_gitdir = NULL;
+    buf->git_relpath = NULL;
+    buf->git_base_lines = NULL;
+    buf->git_base_count = 0;
+    buf->git_signs = NULL;
+    buf->git_signs_count = 0;
     undo_stack_init(&buf->undo);
     undo_stack_init(&buf->redo);
     buf->undo_recording = 1;
@@ -423,6 +444,15 @@ static void editor_buffer_free(editor_buffer *buf)
     }
     free(buf->row);
     free(buf->filename);
+    free(buf->git_root);
+    free(buf->git_gitdir);
+    free(buf->git_relpath);
+    if (buf->git_base_lines) {
+        for (int i = 0; i < buf->git_base_count; i++)
+            free(buf->git_base_lines[i]);
+        free(buf->git_base_lines);
+    }
+    free(buf->git_signs);
     undo_stack_free(&buf->undo);
     undo_stack_free(&buf->redo);
 
@@ -430,6 +460,13 @@ static void editor_buffer_free(editor_buffer *buf)
     buf->filename = NULL;
     buf->numrows = 0;
     buf->dirty = 0;
+    buf->git_root = NULL;
+    buf->git_gitdir = NULL;
+    buf->git_relpath = NULL;
+    buf->git_base_lines = NULL;
+    buf->git_base_count = 0;
+    buf->git_signs = NULL;
+    buf->git_signs_count = 0;
 }
 
 static void editor_buffer_snapshot(editor_buffer *buf)
@@ -445,6 +482,17 @@ static void editor_buffer_snapshot(editor_buffer *buf)
     buf->dirty = E.dirty;
     buf->filename = E.filename;
     buf->syntax = E.syntax;
+    buf->show_git_gutter = E.show_git_gutter;
+    buf->git_available = E.git_available;
+    buf->git_tracked = E.git_tracked;
+    buf->git_signs_dirty = E.git_signs_dirty;
+    buf->git_root = E.git_root;
+    buf->git_gitdir = E.git_gitdir;
+    buf->git_relpath = E.git_relpath;
+    buf->git_base_lines = E.git_base_lines;
+    buf->git_base_count = E.git_base_count;
+    buf->git_signs = E.git_signs;
+    buf->git_signs_count = E.git_signs_count;
     buf->undo = E.undo;
     buf->redo = E.redo;
     buf->undo_recording = E.undo_recording;
@@ -463,6 +511,17 @@ static void editor_buffer_restore(editor_buffer *buf)
     E.dirty = buf->dirty;
     E.filename = buf->filename;
     E.syntax = buf->syntax;
+    E.show_git_gutter = buf->show_git_gutter;
+    E.git_available = buf->git_available;
+    E.git_tracked = buf->git_tracked;
+    E.git_signs_dirty = buf->git_signs_dirty;
+    E.git_root = buf->git_root;
+    E.git_gitdir = buf->git_gitdir;
+    E.git_relpath = buf->git_relpath;
+    E.git_base_lines = buf->git_base_lines;
+    E.git_base_count = buf->git_base_count;
+    E.git_signs = buf->git_signs;
+    E.git_signs_count = buf->git_signs_count;
     E.undo = buf->undo;
     E.redo = buf->redo;
     E.undo_recording = buf->undo_recording;
@@ -623,6 +682,17 @@ void editor_init(void)
     E.sel_sy = 0;
     E.show_line_numbers = 1;
     E.auto_indent = 1;
+    E.show_git_gutter = 1;
+    E.git_available = 0;
+    E.git_tracked = 0;
+    E.git_signs_dirty = 1;
+    E.git_root = NULL;
+    E.git_gitdir = NULL;
+    E.git_relpath = NULL;
+    E.git_base_lines = NULL;
+    E.git_base_count = 0;
+    E.git_signs = NULL;
+    E.git_signs_count = 0;
     E.clipboard = NULL;
     E.clipboard_len = 0;
     E.clipboard_linewise = 0;
@@ -656,6 +726,17 @@ void editor_init(void)
         E.dirty = 0;
         E.filename = NULL;
         E.syntax = NULL;
+        E.show_git_gutter = 1;
+        E.git_available = 0;
+        E.git_tracked = 0;
+        E.git_signs_dirty = 1;
+        E.git_root = NULL;
+        E.git_gitdir = NULL;
+        E.git_relpath = NULL;
+        E.git_base_lines = NULL;
+        E.git_base_count = 0;
+        E.git_signs = NULL;
+        E.git_signs_count = 0;
         undo_stack_init(&E.undo);
         undo_stack_init(&E.redo);
         E.undo_recording = 1;

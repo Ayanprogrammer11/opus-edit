@@ -27,6 +27,8 @@ void terminal_disable_raw_mode(void)
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.orig_termios);
 
     /* Show cursor, exit alternate screen if desired */
+    write(STDOUT_FILENO, "\x1b[?1000l", 8);
+    write(STDOUT_FILENO, "\x1b[?1006l", 8);
     write(STDOUT_FILENO, "\x1b[?7h", 6);
     write(STDOUT_FILENO, "\x1b[?25h", 6);
 }
@@ -84,6 +86,10 @@ void terminal_enable_raw_mode(void)
         perror("tcsetattr");
         exit(1);
     }
+
+    /* Enable basic mouse tracking + SGR extended coords (wheel support). */
+    write(STDOUT_FILENO, "\x1b[?1000h", 8);
+    write(STDOUT_FILENO, "\x1b[?1006h", 8);
 }
 
 /* ── Window size ──────────────────────────────────────────── */

@@ -62,6 +62,28 @@ int input_read_key(void)
         if (read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b';
 
         if (seq[0] == '[') {
+            if (seq[1] == '<') {
+                char buf[32];
+                int idx = 0;
+                while (idx < (int)sizeof(buf) - 1) {
+                    if (read(STDIN_FILENO, &buf[idx], 1) != 1) return '\x1b';
+                    if (buf[idx] == 'm' || buf[idx] == 'M') {
+                        idx++;
+                        break;
+                    }
+                    idx++;
+                }
+                buf[idx] = '\0';
+                int b = 0, x = 0, y = 0;
+                char type = '\0';
+                if (sscanf(buf, "%d;%d;%d%c", &b, &x, &y, &type) == 4) {
+                    (void)x;
+                    (void)y;
+                    if (b == 64) return MOUSE_SCROLL_UP;
+                    if (b == 65) return MOUSE_SCROLL_DOWN;
+                }
+                return '\x1b';
+            }
             if (seq[1] >= '0' && seq[1] <= '9') {
                 if (read(STDIN_FILENO, &seq[2], 1) != 1) return '\x1b';
 
@@ -161,6 +183,39 @@ static void editor_move_cursor(int key)
     row = (E.cy < E.numrows) ? &E.row[E.cy] : NULL;
     int rowlen = row ? row->size : 0;
     if (E.cx > rowlen) E.cx = rowlen;
+}
+
+static void editor_move_render_rows(int delta)
+{
+    int width = output_text_width();
+    int rx = 0;
+    if (E.cy < E.numrows)
+        rx = buffer_cx_to_rx(&E.row[E.cy], E.cx);
+
+    int base = (E.cy < E.numrows)
+        ? output_row_render_index(E.cy)
+        : output_total_render_rows();
+    int cursor_render = base + (rx / width);
+
+    int total_render = output_total_render_rows();
+    int target = cursor_render + delta;
+    if (target < 0) target = 0;
+    if (target > total_render) target = total_render;
+
+    int target_row = E.numrows;
+    int target_line = 0;
+    output_render_row_to_file(target, &target_row, &target_line);
+
+    if (target_row >= E.numrows) {
+        E.cy = E.numrows;
+        E.cx = 0;
+    } else {
+        int target_rx = target_line * width + (rx % width);
+        if (target_rx > E.row[target_row].rsize)
+            target_rx = E.row[target_row].rsize;
+        E.cy = target_row;
+        E.cx = buffer_rx_to_cx(&E.row[target_row], target_rx);
+    }
 }
 
 /* ── Selection helpers ───────────────────────────────────── */
@@ -907,6 +962,16 @@ void input_process_keypress(void)
             handled = 1;
             break;
 
+        /* ── Mouse wheel scrolling ────────────────────────── */
+        case MOUSE_SCROLL_UP:
+            editor_move_render_rows(-3);
+            handled = 1;
+            break;
+        case MOUSE_SCROLL_DOWN:
+            editor_move_render_rows(3);
+            handled = 1;
+            break;
+
         /* ── Go to line (Ctrl-G) ──────────────────────────── */
         case CTRL_KEY('g'):
             editor_goto_line_prompt();
@@ -1003,38 +1068,8 @@ void input_process_keypress(void)
                 /* ── Page Up / Down ───────────────────────── */
                 case PAGE_UP:
                 case PAGE_DOWN:
-                    {
-                        int width = output_text_width();
-                        int rx = 0;
-                        if (E.cy < E.numrows)
-                            rx = buffer_cx_to_rx(&E.row[E.cy], E.cx);
-
-                        int base = (E.cy < E.numrows)
-                            ? output_row_render_index(E.cy)
-                            : output_total_render_rows();
-                        int cursor_render = base + (rx / width);
-
-                        int total_render = output_total_render_rows();
-                        int target = cursor_render
-                                     + (c == PAGE_UP ? -E.screenrows : E.screenrows);
-                        if (target < 0) target = 0;
-                        if (target > total_render) target = total_render;
-
-                        int target_row = E.numrows;
-                        int target_line = 0;
-                        output_render_row_to_file(target, &target_row, &target_line);
-
-                        if (target_row >= E.numrows) {
-                            E.cy = E.numrows;
-                            E.cx = 0;
-                        } else {
-                            int target_rx = target_line * width + (rx % width);
-                            if (target_rx > E.row[target_row].rsize)
-                                target_rx = E.row[target_row].rsize;
-                            E.cy = target_row;
-                            E.cx = buffer_rx_to_cx(&E.row[target_row], target_rx);
-                        }
-                    }
+                    editor_move_render_rows(
+                        c == PAGE_UP ? -E.screenrows : E.screenrows);
                     break;
 
                 /* ── Arrow keys ────────────────────────────── */
@@ -1114,38 +1149,8 @@ void input_process_keypress(void)
 
                 case PAGE_UP:
                 case PAGE_DOWN:
-                    {
-                        int width = output_text_width();
-                        int rx = 0;
-                        if (E.cy < E.numrows)
-                            rx = buffer_cx_to_rx(&E.row[E.cy], E.cx);
-
-                        int base = (E.cy < E.numrows)
-                            ? output_row_render_index(E.cy)
-                            : output_total_render_rows();
-                        int cursor_render = base + (rx / width);
-
-                        int total_render = output_total_render_rows();
-                        int target = cursor_render
-                                     + (c == PAGE_UP ? -E.screenrows : E.screenrows);
-                        if (target < 0) target = 0;
-                        if (target > total_render) target = total_render;
-
-                        int target_row = E.numrows;
-                        int target_line = 0;
-                        output_render_row_to_file(target, &target_row, &target_line);
-
-                        if (target_row >= E.numrows) {
-                            E.cy = E.numrows;
-                            E.cx = 0;
-                        } else {
-                            int target_rx = target_line * width + (rx % width);
-                            if (target_rx > E.row[target_row].rsize)
-                                target_rx = E.row[target_row].rsize;
-                            E.cy = target_row;
-                            E.cx = buffer_rx_to_cx(&E.row[target_row], target_rx);
-                        }
-                    }
+                    editor_move_render_rows(
+                        c == PAGE_UP ? -E.screenrows : E.screenrows);
                     break;
 
                 case ARROW_UP:

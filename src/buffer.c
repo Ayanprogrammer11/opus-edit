@@ -6,6 +6,7 @@
 #include "editor.h"
 #include "output.h"
 #include "undo.h"
+#include "git.h"
 
 #include <limits.h>
 #include <stdint.h>
@@ -132,6 +133,7 @@ void buffer_insert_row(int at, const char *s, size_t len)
     buffer_update_row(&E.row[at]);
     E.numrows++;
     E.dirty++;
+    git_mark_dirty();
 }
 
 /* ── Row deletion ─────────────────────────────────────────── */
@@ -160,6 +162,7 @@ void buffer_delete_row(int at)
 
     E.numrows--;
     E.dirty++;
+    git_mark_dirty();
 }
 
 /* ── Row-level character operations ───────────────────────── */
@@ -184,6 +187,7 @@ void buffer_row_insert_char(erow *row, int at, int c)
 
     buffer_update_row(row);
     E.dirty++;
+    git_mark_dirty();
 }
 
 void buffer_row_delete_char(erow *row, int at)
@@ -197,6 +201,7 @@ void buffer_row_delete_char(erow *row, int at)
 
     buffer_update_row(row);
     E.dirty++;
+    git_mark_dirty();
 }
 
 int buffer_row_append_string(erow *row, const char *s, size_t len)
@@ -221,6 +226,7 @@ int buffer_row_append_string(erow *row, const char *s, size_t len)
 
     buffer_update_row(row);
     E.dirty++;
+    git_mark_dirty();
     return 1;
 }
 

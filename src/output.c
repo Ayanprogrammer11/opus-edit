@@ -5,6 +5,7 @@
 #include "output.h"
 #include "editor.h"
 #include "buffer.h"
+#include "git.h"
 
 #include <ctype.h>
 #include <limits.h>
@@ -406,17 +407,32 @@ static int output_line_number_width(void)
     return width;
 }
 
+static void output_compute_gutter(int *git_width, int *num_width)
+{
+    int cols = (E.screencols > 0) ? E.screencols : 1;
+    int gw = git_show_gutter() ? 2 : 0; /* sign + space */
+    int nw = 0;
+    if (E.show_line_numbers) {
+        int digits = output_line_number_width();
+        if (digits < 1) digits = 1;
+        nw = digits + 1; /* trailing space */
+    }
+
+    if (gw + nw >= cols) {
+        nw = 0;
+        if (gw >= cols) gw = 0;
+    }
+
+    if (git_width) *git_width = gw;
+    if (num_width) *num_width = nw;
+}
+
 static int output_gutter_width(void)
 {
-    if (!E.show_line_numbers) return 0;
-    int width = output_line_number_width();
-    if (width < 1) width = 1;
-    int cols = (E.screencols > 0) ? E.screencols : 1;
-    if (cols <= 2) return 0;
-    int max_width = cols - 2;
-    if (width > max_width) width = max_width;
-    if (width < 1) return 0;
-    return width + 1; /* space after number */
+    int gw = 0;
+    int nw = 0;
+    output_compute_gutter(&gw, &nw);
+    return gw + nw;
 }
 
 static int output_wrap_width(void)
@@ -591,9 +607,12 @@ static void output_draw_rows(abuf *ab)
     int sel_sy = 0, sel_sx = 0, sel_ey = 0, sel_ex = 0, sel_linewise = 0;
     sel_active = output_selection_bounds(&sel_sy, &sel_sx, &sel_ey, &sel_ex,
                                          &sel_linewise);
-    int gutter = output_gutter_width();
-    int show_numbers = gutter > 0;
-    int number_width = show_numbers ? (gutter - 1) : 0;
+    int git_width = 0;
+    int num_width = 0;
+    output_compute_gutter(&git_width, &num_width);
+    int show_git = git_width > 0;
+    int show_numbers = num_width > 0;
+    int number_width = show_numbers ? (num_width - 1) : 0;
     int text_width = output_wrap_width();
 
     int row_idx = 0;
@@ -603,6 +622,21 @@ static void output_draw_rows(abuf *ab)
     for (int y = 0; y < E.screenrows; y++) {
         /* Clear entire line to avoid stale gutter artifacts when toggling. */
         ab_append(ab, "\x1b[2K", 4);
+
+        if (show_git) {
+            char sign = ' ';
+            if (row_idx < E.numrows && row_line == 0)
+                sign = git_sign_for_row(row_idx);
+            if (sign == '+') {
+                ab_append(ab, "\x1b[32m", 5);
+            } else if (sign == '-') {
+                ab_append(ab, "\x1b[31m", 5);
+            }
+            ab_append(ab, &sign, 1);
+            ab_append(ab, " ", 1);
+            if (sign == '+' || sign == '-')
+                ab_append(ab, "\x1b[m", 3);
+        }
 
         if (show_numbers) {
             char lnbuf[32];
@@ -855,6 +889,7 @@ static void output_draw_message_bar(abuf *ab)
 
 void output_refresh_screen(void)
 {
+    git_refresh_signs();
     output_scroll();
 
     abuf ab;

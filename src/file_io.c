@@ -7,6 +7,7 @@
 #include "buffer.h"
 #include "output.h"
 #include "undo.h"
+#include "git.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -74,6 +75,7 @@ void file_open(const char *filename)
     E.filename = copy;
 
     output_select_syntax_highlight();
+    git_on_file_change();
 
     if (!fp) {
         /* New file – that's fine, no rows to read */
@@ -112,6 +114,7 @@ void file_open(const char *filename)
     free(line);
     fclose(fp);
     E.dirty = 0;
+    git_mark_dirty();
 }
 
 /* ── Save file ────────────────────────────────────────────── */
@@ -215,6 +218,7 @@ void file_save(void)
             return;
         }
         output_select_syntax_highlight();
+        git_on_file_change();
     }
     file_write_to_path(E.filename);
 }
@@ -239,5 +243,6 @@ int file_save_as(const char *path)
     free(E.filename);
     E.filename = copy;
     output_select_syntax_highlight();
+    git_on_file_change();
     return 1;
 }

@@ -29,6 +29,7 @@ A lightweight, terminal-based text editor written in pure C. No external UI libr
 - **Auto-indent** on newline (`:set autoindent`)
 - **Duplicate line** (`Ctrl-D` / `:dup`)
 - **Trim trailing whitespace** (`:trim`)
+- **Git gutter** with `+`/`-` signs for added/modified lines (`:set gitgutter`)
 
 ## Building
 
@@ -86,6 +87,7 @@ Mode switches:
 | `Arrow keys` | Move cursor |
 | `Home` / `End` | Jump to beginning / end of line |
 | `Page Up` / `Page Down` | Scroll by screenful |
+| `Mouse wheel` | Scroll by a few lines |
 | `Backspace` / `Delete` | Delete character (Insert mode) |
 | `Enter` | Insert newline (Insert mode) |
 
@@ -154,6 +156,7 @@ Commands (case-insensitive):
 | `:goto <n>` / `:line <n>` | Go to line number |
 | `:set number` / `:set nonumber` | Toggle line numbers |
 | `:set autoindent` / `:set noautoindent` | Toggle auto-indent |
+| `:set gitgutter` / `:set nogitgutter` | Toggle Git gutter |
 | `:trim` | Trim trailing whitespace |
 | `:dup` | Duplicate current line |
 | `:help` | Show command help |

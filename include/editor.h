@@ -102,6 +102,18 @@ typedef struct editor_buffer {
     char *filename;
     /* Syntax */
     editor_syntax *syntax;
+    /* Git gutter */
+    int   show_git_gutter;
+    int   git_available;
+    int   git_tracked;
+    int   git_signs_dirty;
+    char *git_root;
+    char *git_gitdir;
+    char *git_relpath;
+    char **git_base_lines;
+    int   git_base_count;
+    char *git_signs;
+    int   git_signs_count;
     /* Undo/redo */
     undo_stack undo;
     undo_stack redo;
@@ -151,6 +163,18 @@ typedef struct editor_config {
     char *clipboard;
     int   clipboard_len;
     int   clipboard_linewise;
+    /* Git gutter */
+    int   show_git_gutter;
+    int   git_available;
+    int   git_tracked;
+    int   git_signs_dirty;
+    char *git_root;
+    char *git_gitdir;
+    char *git_relpath;
+    char **git_base_lines;
+    int   git_base_count;
+    char *git_signs;
+    int   git_signs_count;
     /* Multi-cursor */
     editor_cursor *mcursors;
     int            mcursor_count;

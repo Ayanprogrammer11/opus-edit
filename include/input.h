@@ -27,7 +27,9 @@ enum editor_key {
     HOME_KEY,
     END_KEY,
     PAGE_UP,
-    PAGE_DOWN
+    PAGE_DOWN,
+    MOUSE_SCROLL_UP,
+    MOUSE_SCROLL_DOWN
 };
 
 /*
