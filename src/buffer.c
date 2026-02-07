@@ -127,6 +127,7 @@ void buffer_insert_row(int at, const char *s, size_t len)
     E.row[at].render         = NULL;
     E.row[at].hl             = NULL;
     E.row[at].hl_open_comment = 0;
+    E.row[at].hl_open_string  = 0;
 
     buffer_update_row(&E.row[at]);
     E.numrows++;
@@ -260,8 +261,44 @@ void buffer_delete_char(void)
     }
 }
 
-void buffer_insert_newline(void)
+int buffer_insert_newline(void)
 {
+    char *indent = NULL;
+    int indent_len = 0;
+    int extra_spaces = 0;
+
+    if (E.auto_indent && E.cy >= 0 && E.cy < E.numrows) {
+        erow *row = &E.row[E.cy];
+        int max = row->size;
+        int leading = 0;
+        while (leading < max &&
+               (row->chars[leading] == ' ' || row->chars[leading] == '\t')) {
+            leading++;
+        }
+        if (E.cx < leading) leading = E.cx;
+        indent_len = leading;
+        if (indent_len > 0) {
+            indent = malloc((size_t)indent_len);
+            if (indent) {
+                memcpy(indent, row->chars, (size_t)indent_len);
+            } else {
+                indent_len = 0;
+            }
+        }
+
+        int j = E.cx - 1;
+        if (j >= row->size) j = row->size - 1;
+        while (j >= 0 &&
+               (row->chars[j] == ' ' || row->chars[j] == '\t')) {
+            j--;
+        }
+        if (j >= 0) {
+            char ch = row->chars[j];
+            if (ch == '{' || ch == '[' || ch == '(')
+                extra_spaces = OPUSEDIT_TAB_STOP;
+        }
+    }
+
     undo_push(UNDO_INSERT_NEWLINE, E.cy, E.cx, 0);
     if (E.cx == 0) {
         buffer_insert_row(E.cy, "", 0);
@@ -278,6 +315,106 @@ void buffer_insert_newline(void)
     }
     E.cy++;
     E.cx = 0;
+
+    int indent_total = 0;
+    if (E.auto_indent && E.cy < E.numrows) {
+        if (indent_len > 0 && indent) {
+            for (int i = 0; i < indent_len; i++) {
+                buffer_insert_char(indent[i]);
+                indent_total++;
+            }
+        }
+        for (int i = 0; i < extra_spaces; i++) {
+            buffer_insert_char(' ');
+            indent_total++;
+        }
+    }
+
+    free(indent);
+    return indent_total;
+}
+
+void buffer_duplicate_line(void)
+{
+    if (E.numrows <= 0) {
+        int saved_auto = E.auto_indent;
+        E.auto_indent = 0;
+        E.cy = 0;
+        E.cx = 0;
+        buffer_insert_newline();
+        E.auto_indent = saved_auto;
+        E.cy = 0;
+        E.cx = 0;
+        editor_set_status_message("Line duplicated.");
+        return;
+    }
+
+    int row_idx = E.cy;
+    if (row_idx >= E.numrows) row_idx = E.numrows - 1;
+    if (row_idx < 0) row_idx = 0;
+
+    erow *row = &E.row[row_idx];
+    int len = row->size;
+    char *copy = malloc(len > 0 ? (size_t)len : 1);
+    if (!copy) {
+        editor_set_status_message("Duplicate failed: out of memory.");
+        return;
+    }
+    if (len > 0) memcpy(copy, row->chars, (size_t)len);
+
+    int saved_cx = E.cx;
+    int saved_auto = E.auto_indent;
+
+    E.cy = row_idx;
+    E.cx = row->size;
+    E.auto_indent = 0;
+    buffer_insert_newline();
+    E.auto_indent = saved_auto;
+
+    for (int i = 0; i < len; i++) {
+        buffer_insert_char(copy[i]);
+    }
+
+    if (saved_cx > len) saved_cx = len;
+    E.cy = row_idx + 1;
+    E.cx = saved_cx;
+
+    free(copy);
+    editor_set_status_message("Line duplicated.");
+}
+
+int buffer_trim_trailing_whitespace(void)
+{
+    if (E.numrows <= 0) return 0;
+
+    int removed = 0;
+    int saved_cx = E.cx;
+    int saved_cy = E.cy;
+
+    for (int row_idx = 0; row_idx < E.numrows; row_idx++) {
+        erow *row = &E.row[row_idx];
+        while (row->size > 0) {
+            int col = row->size - 1;
+            char ch = row->chars[col];
+            if (ch != ' ' && ch != '\t') break;
+            E.cy = row_idx;
+            E.cx = col + 1;
+            undo_push(UNDO_DELETE_CHAR, row_idx, col, ch);
+            buffer_row_delete_char(row, col);
+            removed++;
+        }
+    }
+
+    E.cy = saved_cy;
+    if (E.cy < 0) E.cy = 0;
+    if (E.cy >= E.numrows) E.cy = E.numrows ? E.numrows - 1 : 0;
+    if (E.cy < E.numrows) {
+        int rowlen = E.row[E.cy].size;
+        if (saved_cx > rowlen) saved_cx = rowlen;
+    }
+    E.cx = saved_cx;
+
+    return removed;
 }
 
 /* ── Serialise buffer to a single string ──────────────────── */

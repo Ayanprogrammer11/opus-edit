@@ -8,9 +8,25 @@
  * Key bindings:
  *   Ctrl-Q        Quit (press twice if unsaved changes exist)
  *   Ctrl-S        Save
+ *   Ctrl-N        New buffer
+ *   Ctrl-O        Open file in new buffer
  *   Ctrl-F        Incremental search
+ *   Ctrl-R        Find and replace
+ *   Ctrl-B        Next buffer
+ *   Ctrl-P        Previous buffer
+ *   Ctrl-W        Close buffer
  *   Ctrl-Z        Undo
  *   Ctrl-Y        Redo
+ *   Ctrl-G        Go to line
+ *   Ctrl-D        Duplicate line
+ *   Ctrl-L        Toggle line numbers
+ *   Ctrl-C/X/V    Copy/Cut/Paste (linewise if no selection)
+ *   Ctrl-↑/↓      Add cursor above/below
+ *   Esc           Normal mode
+ *   i             Insert mode
+ *   :             Command mode
+ *   v / V         Visual select (char/line)
+ *   y / d / p     Copy / Cut / Paste (Normal mode)
  *   Arrows        Cursor movement
  *   Page Up/Down  Scroll by screenful
  *   Home / End    Beginning / end of line
@@ -35,11 +51,18 @@ int main(int argc, char *argv[])
 
     if (argc >= 2) {
         file_open(argv[1]);
+        for (int i = 2; i < argc; i++) {
+            editor_buffer_new();
+            file_open(argv[i]);
+        }
     }
 
     editor_set_status_message(
-        "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find "
-        "| Ctrl-Z = undo | Ctrl-Y = redo");
+        "HELP: Esc=normal | i=insert | :=command | v/V=visual | y/d/p=copy/cut/paste "
+        "| Ctrl-S=save | Ctrl-Q=quit | Ctrl-N=new | Ctrl-O=open | Ctrl-F=find "
+        "| Ctrl-R=replace | Ctrl-B/P=next/prev buf | Ctrl-W=close "
+        "| Ctrl-Arrow Up/Down=add cursor | Ctrl-Z=undo | Ctrl-Y=redo "
+        "| Ctrl-G=goto | Ctrl-D=dup | Ctrl-L=lines");
 
     /* ── Main loop ────────────────────────────────────────── */
     for (;;) {

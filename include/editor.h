@@ -16,7 +16,7 @@
 #include "undo.h"
 
 /* ── Build-wide constants ─────────────────────────────────── */
-#define OPUSEDIT_VERSION   "1.1.0"
+#define OPUSEDIT_VERSION   "1.2.0"
 #define OPUSEDIT_TAB_STOP  4
 #define OPUSEDIT_QUIT_TIMES 2
 /*
@@ -37,9 +37,17 @@ enum editor_highlight {
     HL_MATCH
 };
 
+/* ── Editor modes ────────────────────────────────────────── */
+typedef enum editor_mode {
+    MODE_NORMAL = 0,
+    MODE_INSERT,
+    MODE_COMMAND
+} editor_mode;
+
 /* ── Syntax flags ─────────────────────────────────────────── */
 #define HL_HIGHLIGHT_NUMBERS (1 << 0)
 #define HL_HIGHLIGHT_STRINGS (1 << 1)
+#define HL_HIGHLIGHT_TRIPLE_STRINGS (1 << 2)
 
 /* ── Syntax definition ────────────────────────────────────── */
 typedef struct editor_syntax {
@@ -61,7 +69,44 @@ typedef struct erow {
     char          *render;           /* rendered characters (tabs → spaces) */
     unsigned char *hl;               /* per-character highlight tokens    */
     int            hl_open_comment;  /* row ends inside a '/ *' comment?  */
+    int            hl_open_string;   /* row ends inside a triple string?  */
 } erow;
+
+/* ── Selection mode ──────────────────────────────────────── */
+typedef enum editor_sel_mode {
+    SEL_NONE = 0,
+    SEL_CHAR,
+    SEL_LINE
+} editor_sel_mode;
+
+/* ── Multi-cursor ────────────────────────────────────────── */
+typedef struct editor_cursor {
+    int cx;
+    int cy;
+} editor_cursor;
+
+/* ── Editor buffer (one file) ─────────────────────────────── */
+typedef struct editor_buffer {
+    /* Cursor position in file coordinates */
+    int cx, cy;
+    /* Rendered x position (accounts for tabs) */
+    int rx;
+    /* Scroll offsets */
+    int rowoff;
+    int coloff;
+    /* File content */
+    int   numrows;
+    erow *row;
+    /* Status */
+    int   dirty;
+    char *filename;
+    /* Syntax */
+    editor_syntax *syntax;
+    /* Undo/redo */
+    undo_stack undo;
+    undo_stack redo;
+    int        undo_recording;   /* 1 = normal, 0 = replaying undo/redo */
+} editor_buffer;
 
 /* ── Append buffer (double-buffering for output) ──────────── */
 typedef struct abuf {
@@ -94,12 +139,34 @@ typedef struct editor_config {
     char *filename;
     char  statusmsg[256];
     time_t statusmsg_time;
+    /* Mode */
+    editor_mode mode;
+    /* Selection (anchor at sel_sx/sel_sy, end is current cursor) */
+    editor_sel_mode sel_mode;
+    int sel_sx, sel_sy;
+    /* Display options */
+    int show_line_numbers;
+    int auto_indent;
+    /* Clipboard */
+    char *clipboard;
+    int   clipboard_len;
+    int   clipboard_linewise;
+    /* Multi-cursor */
+    editor_cursor *mcursors;
+    int            mcursor_count;
+    int            mcursor_capacity;
+    /* Mode */
     /* Syntax */
     editor_syntax *syntax;
     /* Undo/redo */
     undo_stack undo;
     undo_stack redo;
     int        undo_recording;   /* 1 = normal, 0 = replaying undo/redo */
+    /* Buffer management */
+    editor_buffer *buffers;
+    int            buffer_count;
+    int            buffer_capacity;
+    int            current_buffer;
     /* Original terminal state for restoration */
     struct termios orig_termios;
 } editor_config;
@@ -111,6 +178,22 @@ extern editor_config E;
 void  editor_init(void);
 void  editor_cleanup(void);
 void  editor_set_status_message(const char *fmt, ...);
+int   editor_any_buffer_dirty(void);
+void  editor_clear_selection(void);
+void  editor_clear_mcursors(void);
 char *editor_prompt(const char *prompt, void (*callback)(const char *, int));
+char *editor_prompt_allow_empty(const char *prompt,
+                                void (*callback)(const char *, int));
+void  editor_command_prompt(void);
+void  editor_goto_line_prompt(void);
+
+/* ── Buffer management ───────────────────────────────────── */
+int  editor_buffer_count(void);
+int  editor_buffer_index(void);
+void editor_buffer_new(void);
+void editor_buffer_open_prompt(void);
+void editor_buffer_next(void);
+void editor_buffer_prev(void);
+void editor_buffer_close(void);
 
 #endif /* OPUSEDIT_EDITOR_H */

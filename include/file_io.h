@@ -17,4 +17,10 @@ void file_open(const char *filename);
  */
 void file_save(void);
 
+/*
+ * Write the entire buffer to disk at `path`, updating E.filename.
+ * Returns 1 on success, 0 on failure.
+ */
+int file_save_as(const char *path);
+
 #endif /* OPUSEDIT_FILE_IO_H */

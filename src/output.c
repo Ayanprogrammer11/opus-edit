@@ -7,6 +7,7 @@
 #include "buffer.h"
 
 #include <ctype.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,6 +17,10 @@
 
 static const char *C_HL_extensions[] = {
     ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hxx", NULL
+};
+
+static const char *PY_HL_extensions[] = {
+    ".py", ".pyw", NULL
 };
 
 /*
@@ -48,6 +53,22 @@ static const char *C_HL_keywords[] = {
     NULL
 };
 
+static const char *PY_HL_keywords[] = {
+    /* Control flow & statements */
+    "if", "elif", "else", "for", "while", "break", "continue",
+    "return", "pass", "raise", "try", "except", "finally",
+    "with", "as", "assert", "yield",
+    /* Declarations */
+    "def", "class", "lambda", "import", "from", "global", "nonlocal",
+    /* Async */
+    "async", "await",
+    /* Builtins / literals (type-ish) */
+    "True|", "False|", "None|",
+    "int|", "float|", "bool|", "str|", "bytes|", "bytearray|",
+    "list|", "dict|", "set|", "tuple|", "object|",
+    NULL
+};
+
 static editor_syntax HLDB[] = {
     {
         "c/c++",
@@ -58,6 +79,15 @@ static editor_syntax HLDB[] = {
         "*/",           /* multi-line comment end    */
         HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS
     },
+    {
+        "python",
+        PY_HL_extensions,
+        PY_HL_keywords,
+        "#",            /* single-line comment start */
+        NULL,           /* multi-line comment start  */
+        NULL,           /* multi-line comment end    */
+        HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_TRIPLE_STRINGS
+    },
 };
 
 #define HLDB_ENTRIES (sizeof(HLDB) / sizeof(HLDB[0]))
@@ -66,8 +96,8 @@ static editor_syntax HLDB[] = {
 
 static int is_separator(int c)
 {
-    return isspace(c) || c == '\0'
-        || strchr(",.()+-/*=~%<>[];:!&|^{}#?", c) != NULL;
+    return isspace((unsigned char)c) || c == '\0'
+        || strchr(",.()+-/*=~%<>[];:!&|^{}#?", (unsigned char)c) != NULL;
 }
 
 /* ── Append sanitized text (no control chars) ─────────────── */
@@ -97,6 +127,7 @@ static void output_update_syntax_internal(erow *row, int propagate)
         free(row->hl);
         row->hl = NULL;
         row->hl_open_comment = 0;
+        row->hl_open_string = 0;
         return;
     }
 
@@ -105,13 +136,23 @@ static void output_update_syntax_internal(erow *row, int propagate)
         row->hl = NULL;
         int in_comment = (E.syntax && row->idx > 0
                           && E.row[row->idx - 1].hl_open_comment);
-        int changed = (row->hl_open_comment != in_comment);
+        int in_triple = 0;
+        if (E.syntax && (E.syntax->flags & HL_HIGHLIGHT_TRIPLE_STRINGS)
+            && row->idx > 0) {
+            in_triple = E.row[row->idx - 1].hl_open_string;
+        }
+        int changed = (row->hl_open_comment != in_comment
+                       || row->hl_open_string != in_triple);
         row->hl_open_comment = in_comment;
+        row->hl_open_string = in_triple;
         if (propagate && changed && row->idx + 1 < E.numrows) {
             for (int next_idx = row->idx + 1; next_idx < E.numrows; next_idx++) {
-                int prev = E.row[next_idx].hl_open_comment;
+                int prev_comment = E.row[next_idx].hl_open_comment;
+                int prev_string = E.row[next_idx].hl_open_string;
                 output_update_syntax_internal(&E.row[next_idx], 0);
-                if (E.row[next_idx].hl_open_comment == prev) break;
+                if (E.row[next_idx].hl_open_comment == prev_comment
+                    && E.row[next_idx].hl_open_string == prev_string)
+                    break;
             }
         }
         return;
@@ -126,7 +167,11 @@ static void output_update_syntax_internal(erow *row, int propagate)
     row->hl = tmp;
     memset(row->hl, HL_NORMAL, (size_t)row->rsize);
 
-    if (!E.syntax) return;
+    if (!E.syntax) {
+        row->hl_open_comment = 0;
+        row->hl_open_string = 0;
+        return;
+    }
 
     const char **keywords = E.syntax->keywords;
     const char *scs  = E.syntax->singleline_comment_start;
@@ -140,6 +185,9 @@ static void output_update_syntax_internal(erow *row, int propagate)
     int prev_sep     = 1;       /* previous char was separator? */
     int in_string    = 0;       /* 0 or the quote character     */
     int in_comment   = (row->idx > 0 && E.row[row->idx - 1].hl_open_comment);
+    int in_triple    = 0;
+    if ((E.syntax->flags & HL_HIGHLIGHT_TRIPLE_STRINGS) && row->idx > 0)
+        in_triple = E.row[row->idx - 1].hl_open_string;
 
     int i = 0;
     while (i < row->rsize) {
@@ -158,6 +206,24 @@ static void output_update_syntax_internal(erow *row, int propagate)
                 i += mce_len;
                 in_comment = 0;
                 prev_sep   = 1;
+                continue;
+            }
+            i++;
+            prev_sep = 0;
+            continue;
+        }
+
+        /* ── Triple-quoted string (multiline) ─────────────── */
+        if (in_triple) {
+            row->hl[i] = HL_STRING;
+            if (remaining >= 3
+                && row->render[i] == in_triple
+                && row->render[i + 1] == in_triple
+                && row->render[i + 2] == in_triple) {
+                memset(&row->hl[i], HL_STRING, 3);
+                i += 3;
+                in_triple = 0;
+                prev_sep = 1;
                 continue;
             }
             i++;
@@ -197,6 +263,19 @@ static void output_update_syntax_internal(erow *row, int propagate)
             continue;
         }
 
+        /* ── Triple-quoted string start ───────────────────── */
+        if ((E.syntax->flags & HL_HIGHLIGHT_TRIPLE_STRINGS)
+            && remaining >= 3) {
+            if (!strncmp(&row->render[i], "'''", 3)
+                || !strncmp(&row->render[i], "\"\"\"", 3)) {
+                in_triple = row->render[i];
+                memset(&row->hl[i], HL_STRING, 3);
+                i += 3;
+                prev_sep = 0;
+                continue;
+            }
+        }
+
         /* ── String start ─────────────────────────────────── */
         if (E.syntax->flags & HL_HIGHLIGHT_STRINGS) {
             if (c == '"' || c == '\'') {
@@ -210,7 +289,7 @@ static void output_update_syntax_internal(erow *row, int propagate)
 
         /* ── Numbers ──────────────────────────────────────── */
         if (E.syntax->flags & HL_HIGHLIGHT_NUMBERS) {
-            if ((isdigit(c) && (prev_sep || row->hl[i > 0 ? i - 1 : 0] == HL_NUMBER))
+            if ((isdigit((unsigned char)c) && (prev_sep || row->hl[i > 0 ? i - 1 : 0] == HL_NUMBER))
                 || (c == '.' && i > 0 && row->hl[i - 1] == HL_NUMBER)) {
                 row->hl[i] = HL_NUMBER;
                 i++;
@@ -248,14 +327,19 @@ static void output_update_syntax_internal(erow *row, int propagate)
         i++;
     }
 
-    int changed = (row->hl_open_comment != in_comment);
+    int changed = (row->hl_open_comment != in_comment
+                   || row->hl_open_string != in_triple);
     row->hl_open_comment = in_comment;
+    row->hl_open_string = in_triple;
     /* Propagate change to following rows */
     if (propagate && changed && row->idx + 1 < E.numrows) {
         for (int next_idx = row->idx + 1; next_idx < E.numrows; next_idx++) {
-            int prev = E.row[next_idx].hl_open_comment;
+            int prev_comment = E.row[next_idx].hl_open_comment;
+            int prev_string = E.row[next_idx].hl_open_string;
             output_update_syntax_internal(&E.row[next_idx], 0);
-            if (E.row[next_idx].hl_open_comment == prev) break;
+            if (E.row[next_idx].hl_open_comment == prev_comment
+                && E.row[next_idx].hl_open_string == prev_string)
+                break;
         }
     }
 }
@@ -308,6 +392,170 @@ void output_select_syntax_highlight(void)
     }
 }
 
+/* ── Soft-wrap helpers ────────────────────────────────────── */
+
+static int output_line_number_width(void)
+{
+    int rows = E.numrows;
+    if (rows < 1) rows = 1;
+    int width = 0;
+    do {
+        width++;
+        rows /= 10;
+    } while (rows);
+    return width;
+}
+
+static int output_gutter_width(void)
+{
+    if (!E.show_line_numbers) return 0;
+    int width = output_line_number_width();
+    if (width < 1) width = 1;
+    int cols = (E.screencols > 0) ? E.screencols : 1;
+    if (cols <= 2) return 0;
+    int max_width = cols - 2;
+    if (width > max_width) width = max_width;
+    if (width < 1) return 0;
+    return width + 1; /* space after number */
+}
+
+static int output_wrap_width(void)
+{
+    int cols = (E.screencols > 0) ? E.screencols : 1;
+    int gutter = output_gutter_width();
+    if (gutter >= cols) return 1;
+    return cols - gutter;
+}
+
+int output_text_width(void)
+{
+    return output_wrap_width();
+}
+
+static int output_row_render_lines(const erow *row)
+{
+    if (!row || row->rsize <= 0) return 1;
+    int width = output_wrap_width();
+    if (width <= 0) width = 1;
+    return (row->rsize - 1) / width + 1;
+}
+
+int output_total_render_rows(void)
+{
+    int total = 0;
+    for (int i = 0; i < E.numrows; i++) {
+        int lines = output_row_render_lines(&E.row[i]);
+        if (lines > INT_MAX - total) {
+            return INT_MAX;
+        }
+        total += lines;
+    }
+    return total;
+}
+
+int output_row_render_index(int row_idx)
+{
+    if (row_idx <= 0) return 0;
+    if (row_idx >= E.numrows) return output_total_render_rows();
+
+    int total = 0;
+    for (int i = 0; i < row_idx; i++) {
+        int lines = output_row_render_lines(&E.row[i]);
+        if (lines > INT_MAX - total) {
+            return INT_MAX;
+        }
+        total += lines;
+    }
+    return total;
+}
+
+void output_render_row_to_file(int render_row, int *row_idx, int *row_line)
+{
+    if (row_idx) *row_idx = E.numrows;
+    if (row_line) *row_line = 0;
+
+    int rr = render_row;
+    if (rr < 0) rr = 0;
+
+    for (int i = 0; i < E.numrows; i++) {
+        int lines = output_row_render_lines(&E.row[i]);
+        if (rr < lines) {
+            if (row_idx) *row_idx = i;
+            if (row_line) *row_line = rr;
+            return;
+        }
+        rr -= lines;
+    }
+}
+
+static int output_cursor_render_row(void)
+{
+    int base = (E.cy < E.numrows)
+        ? output_row_render_index(E.cy)
+        : output_total_render_rows();
+    int width = output_wrap_width();
+    return base + (E.rx / width);
+}
+
+static int output_cursor_render_col(void)
+{
+    int width = output_wrap_width();
+    return (E.rx % width) + output_gutter_width();
+}
+
+/* ── Selection helpers ──────────────────────────────────── */
+
+static int output_selection_bounds(int *sy, int *sx, int *ey, int *ex,
+                                   int *linewise)
+{
+    if (E.sel_mode == SEL_NONE || E.numrows <= 0) return 0;
+
+    *sy = E.sel_sy;
+    *sx = E.sel_sx;
+    *ey = E.cy;
+    *ex = E.cx;
+
+    if (*sy > *ey || (*sy == *ey && *sx > *ex)) {
+        int ty = *sy;
+        int tx = *sx;
+        *sy = *ey;
+        *sx = *ex;
+        *ey = ty;
+        *ex = tx;
+    }
+
+    if (*ey < 0) return 0;
+    if (*sy < 0) *sy = 0;
+    if (*sy >= E.numrows && *ey >= E.numrows) return 0;
+    if (*sy >= E.numrows) *sy = E.numrows - 1;
+    if (*ey >= E.numrows) *ey = E.numrows - 1;
+
+    *linewise = (E.sel_mode == SEL_LINE);
+
+    if (*linewise) {
+        *sx = 0;
+        *ex = E.row[*ey].size;
+        return 1;
+    }
+
+    int rowlen = E.row[*ey].size;
+    if (*ex < rowlen) (*ex)++;
+    else *ex = rowlen;
+    return 1;
+}
+
+static int output_mcursor_at_render(const erow *row, int row_idx, int render_idx)
+{
+    if (E.mcursor_count <= 0) return 0;
+    if (!row) return 0;
+    for (int i = 0; i < E.mcursor_count; i++) {
+        if (E.mcursors[i].cy != row_idx) continue;
+        int rx = buffer_cx_to_rx(row, E.mcursors[i].cx);
+        if (rx == render_idx) return 1;
+    }
+    return 0;
+}
+
 /* ── Scrolling ────────────────────────────────────────────── */
 
 void output_scroll(void)
@@ -316,37 +564,72 @@ void output_scroll(void)
     if (E.cy < E.numrows)
         E.rx = buffer_cx_to_rx(&E.row[E.cy], E.cx);
 
-    /* Vertical scroll */
-    if (E.cy < E.rowoff)
-        E.rowoff = E.cy;
-    if (E.cy >= E.rowoff + E.screenrows)
-        E.rowoff = E.cy - E.screenrows + 1;
+    int screenrows = (E.screenrows > 0) ? E.screenrows : 1;
+    int cursor_render = output_cursor_render_row();
 
-    /* Horizontal scroll */
-    if (E.rx < E.coloff)
-        E.coloff = E.rx;
-    if (E.rx >= E.coloff + E.screencols)
-        E.coloff = E.rx - E.screencols + 1;
+    /* Vertical scroll in render-row space */
+    if (cursor_render < E.rowoff)
+        E.rowoff = cursor_render;
+    if (cursor_render >= E.rowoff + screenrows)
+        E.rowoff = cursor_render - screenrows + 1;
+
+    int total_render = output_total_render_rows();
+    int max_rowoff = total_render - screenrows;
+    if (max_rowoff < 0) max_rowoff = 0;
+    if (E.rowoff < 0) E.rowoff = 0;
+    if (E.rowoff > max_rowoff) E.rowoff = max_rowoff;
+
+    /* Soft-wrap disables horizontal scrolling */
+    E.coloff = 0;
 }
 
 /* ── Draw text rows ───────────────────────────────────────── */
 
 static void output_draw_rows(abuf *ab)
 {
-    for (int y = 0; y < E.screenrows; y++) {
-        int filerow = y + E.rowoff;
+    int sel_active = 0;
+    int sel_sy = 0, sel_sx = 0, sel_ey = 0, sel_ex = 0, sel_linewise = 0;
+    sel_active = output_selection_bounds(&sel_sy, &sel_sx, &sel_ey, &sel_ex,
+                                         &sel_linewise);
+    int gutter = output_gutter_width();
+    int show_numbers = gutter > 0;
+    int number_width = show_numbers ? (gutter - 1) : 0;
+    int text_width = output_wrap_width();
 
-        if (filerow >= E.numrows) {
+    int row_idx = 0;
+    int row_line = 0;
+    output_render_row_to_file(E.rowoff, &row_idx, &row_line);
+
+    for (int y = 0; y < E.screenrows; y++) {
+        /* Clear entire line to avoid stale gutter artifacts when toggling. */
+        ab_append(ab, "\x1b[2K", 4);
+
+        if (show_numbers) {
+            char lnbuf[32];
+            int lnlen;
+            if (row_idx < E.numrows && row_line == 0) {
+                lnlen = snprintf(lnbuf, sizeof(lnbuf), "%*d ",
+                                 number_width, row_idx + 1);
+            } else {
+                lnlen = snprintf(lnbuf, sizeof(lnbuf), "%*s ",
+                                 number_width, "");
+            }
+            ab_append(ab, "\x1b[90m", 5);
+            ab_append_sanitized(ab, lnbuf, lnlen);
+            ab_append(ab, "\x1b[m", 3);
+        }
+
+        if (row_idx >= E.numrows) {
             /* Draw '~' gutter for lines past end of file */
             if (E.numrows == 0 && y == E.screenrows / 3) {
                 /* Welcome message */
                 char welcome[80];
                 int welcomelen = snprintf(welcome, sizeof(welcome),
                     "OpusEdit -- version %s", OPUSEDIT_VERSION);
-                if (welcomelen > E.screencols)
-                    welcomelen = E.screencols;
+                if (welcomelen > text_width)
+                    welcomelen = text_width;
 
-                int padding = (E.screencols - welcomelen) / 2;
+                int padding = (text_width - welcomelen) / 2;
                 if (padding) {
                     ab_append(ab, "~", 1);
                     padding--;
@@ -360,41 +643,136 @@ static void output_draw_rows(abuf *ab)
             }
         } else {
             /* Render a file row with syntax highlighting */
-            int rsize = E.row[filerow].rsize;
-            const char *render = E.row[filerow].render;
-            unsigned char *rowhl = E.row[filerow].hl;
-            int coloff = E.coloff;
-            if (coloff > rsize) coloff = rsize;
+            erow *row = &E.row[row_idx];
+            int rsize = row->rsize;
+            const char *render = row->render;
+            unsigned char *rowhl = row->hl;
+            int width = text_width;
+            int start = row_line * width;
+            int eol_cursor = 0;
+            if (E.mcursor_count > 0) {
+                eol_cursor = output_mcursor_at_render(row, row_idx, rsize);
+            }
 
-            int len = rsize - coloff;
+            int sel_start_rx = -1;
+            int sel_end_rx = -1;
+            if (sel_active && row_idx >= sel_sy && row_idx <= sel_ey) {
+                if (sel_linewise) {
+                    sel_start_rx = 0;
+                    sel_end_rx = rsize;
+                } else if (sel_sy == sel_ey) {
+                    int cs = sel_sx;
+                    int ce = sel_ex;
+                    if (cs < 0) cs = 0;
+                    if (ce < 0) ce = 0;
+                    if (cs > row->size) cs = row->size;
+                    if (ce > row->size) ce = row->size;
+                    sel_start_rx = buffer_cx_to_rx(row, cs);
+                    sel_end_rx = buffer_cx_to_rx(row, ce);
+                } else if (row_idx == sel_sy) {
+                    int cs = sel_sx;
+                    if (cs < 0) cs = 0;
+                    if (cs > row->size) cs = row->size;
+                    sel_start_rx = buffer_cx_to_rx(row, cs);
+                    sel_end_rx = rsize;
+                } else if (row_idx == sel_ey) {
+                    int ce = sel_ex;
+                    if (ce < 0) ce = 0;
+                    if (ce > row->size) ce = row->size;
+                    sel_start_rx = 0;
+                    sel_end_rx = buffer_cx_to_rx(row, ce);
+                } else {
+                    sel_start_rx = 0;
+                    sel_end_rx = rsize;
+                }
+                if (sel_end_rx < sel_start_rx) {
+                    int tmp = sel_start_rx;
+                    sel_start_rx = sel_end_rx;
+                    sel_end_rx = tmp;
+                }
+                if (sel_end_rx == sel_start_rx) {
+                    sel_start_rx = -1;
+                    sel_end_rx = -1;
+                }
+            }
+
+            int len = rsize - start;
             if (len < 0) len = 0;
-            if (len > E.screencols) len = E.screencols;
+            if (len > width) len = width;
+            if (eol_cursor) {
+                int eol_col = rsize - start;
+                if (eol_col >= 0 && eol_col < width) {
+                    int needed = eol_col + 1;
+                    if (needed > len) len = needed;
+                }
+            }
 
-            const char    *c  = render ? &render[coloff] : "";
-            unsigned char *hl = (render && rowhl) ? &rowhl[coloff] : NULL;
+            const char    *c  = (render && start < rsize) ? &render[start] : "";
+            unsigned char *hl = (render && rowhl && start < rsize)
+                                ? &rowhl[start] : NULL;
 
             int current_color = -1;
+            int current_invert = 0;
             for (int j = 0; j < len; j++) {
-                if (iscntrl((unsigned char)c[j])) {
+                int render_idx = start + j;
+                int is_virtual = (render_idx >= rsize);
+                char ch = is_virtual ? ' ' : c[j];
+                unsigned char hlval = (!is_virtual && hl) ? hl[j] : HL_NORMAL;
+                int selected = (sel_start_rx >= 0
+                                && render_idx >= sel_start_rx
+                                && render_idx < sel_end_rx);
+                if (!selected && output_mcursor_at_render(row, row_idx, render_idx))
+                    selected = 1;
+                int desired_invert = selected ? 1 : 0;
+
+                if (!is_virtual && iscntrl((unsigned char)ch)) {
                     /* Render control chars as inverted letter */
-                    char sym = (c[j] <= 26) ? '@' + c[j] : '?';
+                    char sym = (ch <= 26) ? '@' + ch : '?';
                     ab_append(ab, "\x1b[7m", 4);
                     ab_append(ab, &sym, 1);
                     ab_append(ab, "\x1b[m", 3);
-                    if (current_color != -1) {
+                    current_color = -1;
+                    current_invert = 0;
+                    if (desired_invert) {
+                        ab_append(ab, "\x1b[7m", 4);
+                        current_invert = 1;
+                    }
+                    if (hlval != HL_NORMAL) {
+                        int color = output_syntax_to_color(hlval);
                         char cbuf[16];
                         int clen = snprintf(cbuf, sizeof(cbuf),
-                                            "\x1b[%dm", current_color);
+                                            "\x1b[%dm", color);
                         ab_append(ab, cbuf, clen);
+                        current_color = color;
                     }
-                } else if (!hl || hl[j] == HL_NORMAL) {
+                } else if (hlval == HL_NORMAL) {
+                    if (desired_invert != current_invert) {
+                        if (desired_invert) {
+                            ab_append(ab, "\x1b[7m", 4);
+                            current_invert = 1;
+                        } else {
+                            ab_append(ab, "\x1b[m", 3);
+                            current_invert = 0;
+                            current_color = -1;
+                        }
+                    }
                     if (current_color != -1) {
                         ab_append(ab, "\x1b[39m", 5);
                         current_color = -1;
                     }
-                    ab_append(ab, &c[j], 1);
+                    ab_append(ab, &ch, 1);
                 } else {
-                    int color = output_syntax_to_color(hl[j]);
+                    int color = output_syntax_to_color(hlval);
+                    if (desired_invert != current_invert) {
+                        if (desired_invert) {
+                            ab_append(ab, "\x1b[7m", 4);
+                            current_invert = 1;
+                        } else {
+                            ab_append(ab, "\x1b[m", 3);
+                            current_invert = 0;
+                            current_color = -1;
+                        }
+                    }
                     if (color != current_color) {
                         current_color = color;
                         char cbuf[16];
@@ -402,14 +780,22 @@ static void output_draw_rows(abuf *ab)
                                             "\x1b[%dm", color);
                         ab_append(ab, cbuf, clen);
                     }
-                    ab_append(ab, &c[j], 1);
+                    ab_append(ab, &ch, 1);
                 }
             }
-            ab_append(ab, "\x1b[39m", 5);  /* reset colour */
+            ab_append(ab, "\x1b[m", 3);  /* reset attributes */
         }
 
         ab_append(ab, "\x1b[K", 3);  /* clear to end of line */
         ab_append(ab, "\r\n", 2);
+
+        if (row_idx < E.numrows) {
+            row_line++;
+            if (row_line >= output_row_render_lines(&E.row[row_idx])) {
+                row_idx++;
+                row_line = 0;
+            }
+        }
     }
 }
 
@@ -424,7 +810,17 @@ static void output_draw_status_bar(abuf *ab)
     int len = snprintf(status, sizeof(status), " %.40s %s",
                        E.filename ? E.filename : "[No Name]",
                        E.dirty ? "(modified)" : "");
-    int rlen = snprintf(rstatus, sizeof(rstatus), "%s | %d/%d  Col %d ",
+    int buf_idx = (E.buffer_count > 0) ? (E.current_buffer + 1) : 0;
+    int buf_cnt = E.buffer_count;
+    const char *mode = "NORMAL";
+    if (E.mode == MODE_COMMAND) mode = "COMMAND";
+    else if (E.mode == MODE_INSERT) mode = "INSERT";
+    else if (E.sel_mode == SEL_CHAR) mode = "VISUAL";
+    else if (E.sel_mode == SEL_LINE) mode = "V-LINE";
+    int rlen = snprintf(rstatus, sizeof(rstatus),
+                        "buf %d/%d | %s | %s | %d/%d  Col %d ",
+                        buf_idx, buf_cnt,
+                        mode,
                         E.syntax ? E.syntax->filetype : "no ft",
                         E.cy + 1, E.numrows, E.cx + 1);
 
@@ -465,6 +861,7 @@ void output_refresh_screen(void)
     ab_init(&ab);
 
     ab_append(&ab, "\x1b[?25l", 6);  /* hide cursor          */
+    ab_append(&ab, "\x1b[?7l", 6);   /* disable line wrap    */
     ab_append(&ab, "\x1b[H",    3);  /* cursor to top-left   */
 
     output_draw_rows(&ab);
@@ -473,11 +870,17 @@ void output_refresh_screen(void)
 
     /* Position the cursor */
     char buf[32];
+    int cursor_render = output_cursor_render_row();
+    int cursor_col = output_cursor_render_col();
+    int cursor_row = cursor_render - E.rowoff;
+    if (cursor_row < 0) cursor_row = 0;
+    if (cursor_col < 0) cursor_col = 0;
     int len = snprintf(buf, sizeof(buf), "\x1b[%d;%dH",
-                       (E.cy - E.rowoff) + 1,
-                       (E.rx - E.coloff) + 1);
+                       cursor_row + 1,
+                       cursor_col + 1);
     ab_append(&ab, buf, len);
 
+    ab_append(&ab, "\x1b[?7h", 6);  /* re-enable line wrap */
     ab_append(&ab, "\x1b[?25h", 6);  /* show cursor */
 
     /* Single write — flicker-free */

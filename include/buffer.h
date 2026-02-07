@@ -49,8 +49,15 @@ void buffer_insert_char(int c);
 /* Delete the character before the cursor (Backspace). */
 void buffer_delete_char(void);
 
-/* Insert a newline at the cursor, splitting the current row. */
-void buffer_insert_newline(void);
+/* Insert a newline at the cursor, splitting the current row.
+ * Returns the count of auto-indent characters inserted. */
+int  buffer_insert_newline(void);
+
+/* Duplicate the current line, placing the cursor on the copy. */
+void buffer_duplicate_line(void);
+
+/* Trim trailing spaces/tabs from all rows. Returns count removed. */
+int  buffer_trim_trailing_whitespace(void);
 
 /* ── Coordinate helpers ───────────────────────────────────── */
 

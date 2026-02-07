@@ -18,6 +18,17 @@ void output_scroll(void);
 /* Render the full screen: rows + status bar + message bar. */
 void output_refresh_screen(void);
 
+/* Effective text width (screen columns minus gutters). */
+int  output_text_width(void);
+
+/*
+ * Soft-wrap helpers: treat each file row as one or more visual rows.
+ * These utilities map between file rows and wrapped render rows.
+ */
+int  output_total_render_rows(void);
+int  output_row_render_index(int row_idx);
+void output_render_row_to_file(int render_row, int *row_idx, int *row_line);
+
 /* ── Syntax highlighting ──────────────────────────────────── */
 
 /* Map a highlight token (HL_*) to an ANSI color code. */

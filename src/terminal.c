@@ -27,6 +27,7 @@ void terminal_disable_raw_mode(void)
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.orig_termios);
 
     /* Show cursor, exit alternate screen if desired */
+    write(STDOUT_FILENO, "\x1b[?7h", 6);
     write(STDOUT_FILENO, "\x1b[?25h", 6);
 }
 

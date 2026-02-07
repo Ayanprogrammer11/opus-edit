@@ -12,4 +12,10 @@
  */
 void find(void);
 
+/*
+ * Find-and-replace: prompt for a query and replacement string,
+ * then replace all occurrences in the buffer.
+ */
+void find_replace(void);
+
 #endif /* OPUSEDIT_FIND_H */
