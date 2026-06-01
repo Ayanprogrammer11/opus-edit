@@ -6,6 +6,7 @@
 #include "editor.h"
 #include "buffer.h"
 #include "git.h"
+#include "terminal.h"
 
 #include <ctype.h>
 #include <limits.h>
@@ -918,7 +919,7 @@ void output_refresh_screen(void)
     ab_append(&ab, "\x1b[?7h", 6);  /* re-enable line wrap */
     ab_append(&ab, "\x1b[?25h", 6);  /* show cursor */
 
-    /* Single write — flicker-free */
-    write(STDOUT_FILENO, ab.b, (size_t)ab.len);
+    /* Single complete write keeps refreshes flicker-free. */
+    terminal_write_all(ab.b, (size_t)ab.len);
     ab_free(&ab);
 }

@@ -230,8 +230,8 @@ void editor_goto_line_prompt(void)
 
 static void editor_quit_now(void)
 {
-    write(STDOUT_FILENO, "\x1b[2J", 4);
-    write(STDOUT_FILENO, "\x1b[H",  3);
+    terminal_write_all("\x1b[2J", 4);
+    terminal_write_all("\x1b[H",  3);
     editor_cleanup();
     exit(0);
 }

@@ -14,6 +14,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -887,8 +888,8 @@ void input_process_keypress(void)
                 return;
             }
             /* Clear screen and reposition cursor before exit */
-            write(STDOUT_FILENO, "\x1b[2J", 4);
-            write(STDOUT_FILENO, "\x1b[H",  3);
+            terminal_write_all("\x1b[2J", 4);
+            terminal_write_all("\x1b[H",  3);
             editor_cleanup();
             exit(0);
             break;

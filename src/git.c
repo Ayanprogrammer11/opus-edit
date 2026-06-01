@@ -11,6 +11,7 @@
 #include <ctype.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -33,8 +34,8 @@ static char *path_join(const char *a, const char *b)
     if (!a || !b) return NULL;
     size_t alen = strlen(a);
     size_t blen = strlen(b);
+    if (alen > SIZE_MAX - blen - 2) return NULL;
     size_t need = alen + blen + 2;
-    if (need > SIZE_MAX) return NULL;
     char *out = malloc(need);
     if (!out) return NULL;
     memcpy(out, a, alen);
@@ -107,6 +108,11 @@ static char *read_text_file(const char *path)
         return NULL;
     }
     size_t n = fread(buf, 1, (size_t)len, fp);
+    if (n != (size_t)len && ferror(fp)) {
+        free(buf);
+        fclose(fp);
+        return NULL;
+    }
     fclose(fp);
     buf[n] = '\0';
     return buf;
@@ -137,6 +143,11 @@ static int read_file_bytes(const char *path, unsigned char **out, size_t *out_le
         return 0;
     }
     size_t n = fread(buf, 1, (size_t)len, fp);
+    if (n != (size_t)len && ferror(fp)) {
+        free(buf);
+        fclose(fp);
+        return 0;
+    }
     fclose(fp);
     *out = buf;
     *out_len = n;
@@ -167,9 +178,9 @@ static char *normalize_file_path(const char *path)
 
     char resolved[PATH_MAX];
     if (realpath(dir, resolved)) {
+        char *out = path_join(resolved, name);
         free(abs);
         free(dir);
-        char *out = path_join(resolved, name);
         return out ? out : strdup(path);
     }
 
@@ -360,6 +371,11 @@ static int git_inflate(const unsigned char *in, size_t in_len,
         return 0;
     }
 
+    if (in_len > UINT_MAX) {
+        free(buf);
+        inflateEnd(&strm);
+        return 0;
+    }
     strm.next_in = (Bytef *)in;
     strm.avail_in = (uInt)in_len;
     size_t total = 0;
@@ -462,7 +478,7 @@ static int git_read_object(const char *gitdir, const char *oid,
     char *size_str = space + 1;
     unsigned long declared = strtoul(size_str, NULL, 10);
     size_t data_len = inflated_len - header_len - 1;
-    if (declared > data_len) {
+    if (declared != data_len) {
         free(header);
         free(inflated);
         return 0;

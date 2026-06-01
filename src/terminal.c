@@ -19,6 +19,21 @@
 static volatile sig_atomic_t pending_resize = 0;
 static volatile sig_atomic_t pending_exit   = 0;
 
+int terminal_write_all(const char *buf, size_t len)
+{
+    size_t off = 0;
+    while (off < len) {
+        ssize_t n = write(STDOUT_FILENO, buf + off, len - off);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1;
+        off += (size_t)n;
+    }
+    return 0;
+}
+
 /* ── Raw mode ─────────────────────────────────────────────── */
 
 void terminal_disable_raw_mode(void)
@@ -27,10 +42,10 @@ void terminal_disable_raw_mode(void)
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.orig_termios);
 
     /* Show cursor, exit alternate screen if desired */
-    write(STDOUT_FILENO, "\x1b[?1000l", 8);
-    write(STDOUT_FILENO, "\x1b[?1006l", 8);
-    write(STDOUT_FILENO, "\x1b[?7h", 6);
-    write(STDOUT_FILENO, "\x1b[?25h", 6);
+    terminal_write_all("\x1b[?1000l", 8);
+    terminal_write_all("\x1b[?1006l", 8);
+    terminal_write_all("\x1b[?7h", 6);
+    terminal_write_all("\x1b[?25h", 6);
 }
 
 void terminal_enable_raw_mode(void)
@@ -51,19 +66,19 @@ void terminal_enable_raw_mode(void)
      *   ISTRIP  – strip 8th bit → off
      *   IXON    – Ctrl-S / Ctrl-Q flow control → off
      */
-    raw.c_iflag &= ~((unsigned long)(BRKINT | ICRNL | INPCK | ISTRIP | IXON));
+    raw.c_iflag &= (tcflag_t)~(tcflag_t)(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
 
     /*
      * Output flags:
      *   OPOST   – post-processing (NL → CR+NL) → off
      */
-    raw.c_oflag &= ~((unsigned long)OPOST);
+    raw.c_oflag &= (tcflag_t)~(tcflag_t)OPOST;
 
     /*
      * Control flags:
      *   CS8     – set character size to 8 bits
      */
-    raw.c_cflag |= (unsigned long)CS8;
+    raw.c_cflag |= (tcflag_t)CS8;
 
     /*
      * Local flags:
@@ -72,7 +87,7 @@ void terminal_enable_raw_mode(void)
      *   IEXTEN  – Ctrl-V literal → off
      *   ISIG    – SIGINT / SIGTSTP on Ctrl-C / Ctrl-Z → off
      */
-    raw.c_lflag &= ~((unsigned long)(ECHO | ICANON | IEXTEN | ISIG));
+    raw.c_lflag &= (tcflag_t)~(tcflag_t)(ECHO | ICANON | IEXTEN | ISIG);
 
     /*
      * read() behaviour:
@@ -88,8 +103,8 @@ void terminal_enable_raw_mode(void)
     }
 
     /* Enable basic mouse tracking + SGR extended coords (wheel support). */
-    write(STDOUT_FILENO, "\x1b[?1000h", 8);
-    write(STDOUT_FILENO, "\x1b[?1006h", 8);
+    terminal_write_all("\x1b[?1000h", 8);
+    terminal_write_all("\x1b[?1006h", 8);
 }
 
 /* ── Window size ──────────────────────────────────────────── */

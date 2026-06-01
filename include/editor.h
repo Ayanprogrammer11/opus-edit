@@ -16,7 +16,7 @@
 #include "undo.h"
 
 /* ── Build-wide constants ─────────────────────────────────── */
-#define OPUSEDIT_VERSION   "1.2.0"
+#define OPUSEDIT_VERSION   "2.0.0"
 #define OPUSEDIT_TAB_STOP  4
 #define OPUSEDIT_QUIT_TIMES 2
 /*

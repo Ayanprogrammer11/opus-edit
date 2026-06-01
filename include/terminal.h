@@ -8,6 +8,11 @@
 #ifndef OPUSEDIT_TERMINAL_H
 #define OPUSEDIT_TERMINAL_H
 
+#include <stddef.h>
+
+/* Best-effort complete write for terminal escape sequences. */
+int terminal_write_all(const char *buf, size_t len);
+
 /* Enter raw mode, saving original terminal attributes. */
 void terminal_enable_raw_mode(void);
 

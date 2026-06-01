@@ -1,6 +1,6 @@
 # OpusEdit
 
-A lightweight, terminal-based text editor written in pure C. No external UI libraries — just `<termios.h>` and VT100 escape sequences.
+A lightweight, terminal-based text editor written in C. It uses `<termios.h>` and VT100 escape sequences for the UI, with a small zlib-backed Git gutter.
 
 ![C](https://img.shields.io/badge/language-C11-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
@@ -8,7 +8,7 @@ A lightweight, terminal-based text editor written in pure C. No external UI libr
 
 ## Features
 
-- **Zero dependencies** — no ncurses, no third-party libraries
+- **No external UI libraries** — no ncurses or GUI toolkit
 - **Syntax highlighting** for C/C++ and Python (keywords, strings, numbers, comments)
 - **Undo/redo** with intelligent grouping (`Ctrl-Z` / `Ctrl-Y`)
 - **Incremental search** with live highlighting and arrow-key cycling
@@ -21,7 +21,7 @@ A lightweight, terminal-based text editor written in pure C. No external UI libr
 - **Multi-buffer editing** with buffer cycling and close
 - **Full cursor navigation** — arrows, Home/End, Page Up/Down
 - **Status bar** — filename, modified indicator, filetype, cursor position
-- **Safe file I/O** — permission preservation, `fsync` on save
+- **Safer file I/O** — permission preservation, complete writes, and `fsync`/`fdatasync` on save
 - **Graceful signal handling** — `SIGWINCH` (resize), `SIGTERM`, `SIGINT`
 - **Memory-safe teardown** — all allocations freed on exit
 - **Line numbers** with toggle (`Ctrl-L` / `:set number`)
@@ -33,7 +33,15 @@ A lightweight, terminal-based text editor written in pure C. No external UI libr
 
 ## Building
 
-Requires a C11 compiler (GCC or Clang) and a POSIX environment (macOS or Linux).
+Requires a C11 compiler (GCC or Clang), a POSIX environment (macOS or Linux), and zlib development headers.
+
+On Debian/Ubuntu:
+
+```sh
+sudo apt install build-essential zlib1g-dev
+```
+
+On macOS with Xcode Command Line Tools, zlib is normally available through the system SDK.
 
 ```sh
 make            # default build (-O2)
@@ -195,7 +203,7 @@ opus-edit/
 | **input** | Byte-level `read()`, multi-byte escape sequence collapsing, command dispatch |
 | **buffer** | Dynamic array of `erow` structs, insert/delete/split, tab expansion, serialization |
 | **output** | `abuf` double-buffering, row rendering with ANSI colors, status & message bars |
-| **file_io** | `fopen` for reading, `open`+`write`+`fsync` for atomic-ish saves |
+| **file_io** | `fopen` for reading, `open`+`write`+`fsync`/`fdatasync` for durable saves |
 | **find** | Prompt-driven incremental search, highlight overlay, bidirectional cycling |
 | **undo** | Operation stack with auto-grouping, inverse computation, cursor restoration |
 
@@ -205,6 +213,10 @@ opus-edit/
 - Linux: compiled with `-D_GNU_SOURCE`
 - File sync: uses `fdatasync()` on Linux, `fsync()` on macOS
 - `O_DSYNC` availability handled via `#ifdef`
+
+## Security
+
+Please see [SECURITY.md](SECURITY.md) for supported versions and vulnerability reporting guidance.
 
 ## License
 
