@@ -286,6 +286,29 @@ def scenario_undo_back_to_saved_quits_cleanly(binary: Path, root: Path) -> None:
     assert_file(target, b"abc\n")
 
 
+def scenario_first_typed_run_undoes_together(binary: Path, root: Path) -> None:
+    target = root / "empty-undo.txt"
+    target.write_bytes(b"")
+    with EditorSession(binary, target, "first typed run undo") as ed:
+        ed.send(b"abc")
+        ed.send(CTRL_Z)
+        ed.send(CTRL_S + CTRL_Q)
+        ed.wait_exit()
+    assert_file(target, b"")
+
+
+def scenario_unnamed_first_insert_undo_saves_empty(binary: Path, root: Path) -> None:
+    target = root / "unnamed-undo-empty.txt"
+    with EditorSession(binary, None, "unnamed first insert undo") as ed:
+        ed.send(b"a")
+        ed.send(CTRL_Z)
+        ed.send(CTRL_S)
+        ed.send(str(target) + "\r")
+        ed.send(CTRL_Q)
+        ed.wait_exit()
+    assert_file(target, b"")
+
+
 def scenario_newline_undo_redo(binary: Path, root: Path) -> None:
     target = root / "newline-redo.txt"
     with EditorSession(binary, target, "newline undo redo") as ed:
@@ -369,6 +392,18 @@ def scenario_multi_cursor_insert(binary: Path, root: Path) -> None:
         ed.send(CTRL_S + CTRL_Q)
         ed.wait_exit()
     assert_file(target, b"aa!\naa!\n")
+
+
+def scenario_multi_cursor_insert_undo_groups(binary: Path, root: Path) -> None:
+    target = root / "multi-cursor-undo.txt"
+    with EditorSession(binary, target, "multi cursor insert undo") as ed:
+        ed.send(b"aa" + ENTER + b"aa")
+        ed.send(CTRL_UP)
+        ed.send(b"!")
+        ed.send(CTRL_Z)
+        ed.send(CTRL_S + CTRL_Q)
+        ed.wait_exit()
+    assert_file(target, b"aa\naa\n")
 
 
 def scenario_unsaved_close_confirmation(binary: Path, root: Path) -> None:
@@ -543,6 +578,19 @@ def scenario_charwise_selection_copy_paste(binary: Path, root: Path) -> None:
         ed.send(CTRL_S + CTRL_Q)
         ed.wait_exit()
     assert_file(target, b"abcdefab\n")
+
+
+def scenario_paste_empty_clipboard_keeps_selection(binary: Path, root: Path) -> None:
+    target = root / "empty-clipboard-paste.txt"
+    with EditorSession(binary, target, "empty clipboard paste") as ed:
+        ed.send(b"abc")
+        ed.send(ESC, pause=0.2)
+        ed.send(HOME)
+        ed.send(b"v")
+        ed.send(b"p")
+        ed.send(CTRL_S + CTRL_Q)
+        ed.wait_exit()
+    assert_file(target, b"abc\n")
 
 
 def scenario_ctrl_clipboard_cut_paste(binary: Path, root: Path) -> None:
@@ -838,6 +886,33 @@ def scenario_multi_cursor_down_backspace(binary: Path, root: Path) -> None:
     assert_file(target, b"ab!\nab!\n")
 
 
+def scenario_linewise_delete_final_line(binary: Path, root: Path) -> None:
+    target = root / "linewise-delete-final.txt"
+    with EditorSession(binary, target, "linewise delete final line") as ed:
+        ed.send(b"one" + ENTER + b"two")
+        ed.send(ESC, pause=0.2)
+        ed.send(b"Vd")
+        ed.send(CTRL_S + CTRL_Q)
+        ed.wait_exit()
+    assert_file(target, b"one\n")
+
+
+def scenario_linewise_paste_into_empty_buffer(binary: Path, root: Path) -> None:
+    source = root / "linewise-paste-source.txt"
+    target = root / "linewise-paste-empty.txt"
+    source.write_bytes(b"one\n")
+    with EditorSession(binary, source, "linewise paste into empty") as ed:
+        ed.send(ESC, pause=0.2)
+        ed.send(b"yy")
+        ed.send(CTRL_N)
+        ed.send(b"p")
+        ed.send(CTRL_S)
+        ed.send(str(target) + "\r")
+        ed.send(CTRL_Q)
+        ed.wait_exit()
+    assert_file(target, b"one\n")
+
+
 def scenario_mouse_scroll_is_non_destructive(binary: Path, root: Path) -> None:
     target = root / "mouse-scroll.txt"
     lines = [f"scroll-{i:02d}" for i in range(30)]
@@ -855,6 +930,8 @@ SCENARIOS = [
     scenario_fast_escape_preserves_following_keys,
     scenario_undo_redo,
     scenario_undo_back_to_saved_quits_cleanly,
+    scenario_first_typed_run_undoes_together,
+    scenario_unnamed_first_insert_undo_saves_empty,
     scenario_newline_undo_redo,
     scenario_command_trim_duplicate,
     scenario_visual_line_copy_paste,
@@ -862,6 +939,7 @@ SCENARIOS = [
     scenario_search_then_insert,
     scenario_multi_buffer_open_save,
     scenario_multi_cursor_insert,
+    scenario_multi_cursor_insert_undo_groups,
     scenario_unsaved_close_confirmation,
     scenario_unnamed_save_as_prompt,
     scenario_unicode_save_as_prompt,
@@ -874,6 +952,7 @@ SCENARIOS = [
     scenario_prompt_open_cancel_keeps_buffer,
     scenario_navigation_editing_keys,
     scenario_charwise_selection_copy_paste,
+    scenario_paste_empty_clipboard_keeps_selection,
     scenario_ctrl_clipboard_cut_paste,
     scenario_replace_with_empty_string,
     scenario_search_cancel_keeps_cursor,
@@ -890,6 +969,8 @@ SCENARIOS = [
     scenario_command_find_alias,
     scenario_command_replace_and_help,
     scenario_multi_cursor_down_backspace,
+    scenario_linewise_delete_final_line,
+    scenario_linewise_paste_into_empty_buffer,
     scenario_mouse_scroll_is_non_destructive,
 ]
 

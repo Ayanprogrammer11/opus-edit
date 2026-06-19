@@ -49,6 +49,7 @@ static void file_reset_buffer_state(void)
     E.rx = 0;
     E.rowoff = 0;
     E.coloff = 0;
+    output_invalidate_wrap_cache();
 
     undo_stack_free(&E.undo);
     undo_stack_free(&E.redo);
@@ -236,6 +237,7 @@ int file_open(const char *filename)
     E.numrows = loaded_count;
     E.ends_with_newline = loaded_ends_with_newline;
     editor_mark_saved();
+    output_invalidate_wrap_cache();
 
     output_select_syntax_highlight();
     git_on_file_change();

@@ -4,6 +4,7 @@
 
 #include "terminal.h"
 #include "editor.h"
+#include "output.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -197,6 +198,7 @@ int terminal_apply_pending_resize(void)
     pending_resize = 0;
     E.screenrows = (rows > 2) ? (rows - 2) : 1; /* status + message bars */
     E.screencols = cols;
+    output_invalidate_wrap_cache();
 
     /* Clamp cursor position */
     if (E.cy >= E.numrows) E.cy = E.numrows ? E.numrows - 1 : 0;

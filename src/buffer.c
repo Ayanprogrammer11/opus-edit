@@ -51,6 +51,7 @@ int buffer_rx_to_cx(const erow *row, int rx)
 void buffer_update_row(erow *row)
 {
     if (!row) return;
+    output_invalidate_wrap_cache();
     if (row->size < 0 || row->size > OPUSEDIT_MAX_ROW_SIZE) {
         free(row->render);
         row->render = NULL;

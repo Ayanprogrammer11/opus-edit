@@ -423,6 +423,11 @@ static int mcursors_active(void)
     return E.mcursor_count > 0;
 }
 
+static int clipboard_has_text(void)
+{
+    return E.clipboard && E.clipboard_len > 0;
+}
+
 static void mcursor_add(int cx, int cy)
 {
     if (cy < 0 || cy >= E.numrows) return;
@@ -593,6 +598,7 @@ static void mcursors_apply_insert_char(int c)
     if (!list) return;
     qsort(list, (size_t)count, sizeof(cursor_pos), cursor_pos_cmp_desc);
 
+    undo_begin_group();
     for (int i = 0; i < count; i++) {
         int row = list[i].cy;
         int col = list[i].cx;
@@ -612,6 +618,7 @@ static void mcursors_apply_insert_char(int c)
             mcursors_shift_after_insert(list, count, row, col);
         }
     }
+    undo_end_group();
 
     mcursors_normalize_from_list(list, count);
     free(list);
@@ -629,6 +636,7 @@ static void mcursors_apply_newline(void)
     if (!list) return;
     qsort(list, (size_t)count, sizeof(cursor_pos), cursor_pos_cmp_desc);
 
+    undo_begin_group();
     for (int i = 0; i < count; i++) {
         int row = list[i].cy;
         int col = list[i].cx;
@@ -647,6 +655,7 @@ static void mcursors_apply_newline(void)
         if (indent > 0)
             mcursors_shift_after_indent(list, count, row + 1, indent);
     }
+    undo_end_group();
 
     mcursors_normalize_from_list(list, count);
     free(list);
@@ -664,6 +673,7 @@ static void mcursors_apply_backspace(void)
     if (!list) return;
     qsort(list, (size_t)count, sizeof(cursor_pos), cursor_pos_cmp_desc);
 
+    undo_begin_group();
     for (int i = 0; i < count; i++) {
         int row = list[i].cy;
         int col = list[i].cx;
@@ -688,6 +698,7 @@ static void mcursors_apply_backspace(void)
             }
         }
     }
+    undo_end_group();
 
     mcursors_normalize_from_list(list, count);
     free(list);
@@ -706,6 +717,7 @@ static void mcursors_apply_delete(void)
     if (!list) return;
     qsort(list, (size_t)count, sizeof(cursor_pos), cursor_pos_cmp_desc);
 
+    undo_begin_group();
     for (int i = 0; i < count; i++) {
         int row = list[i].cy;
         int col = list[i].cx;
@@ -733,6 +745,7 @@ static void mcursors_apply_delete(void)
             mcursors_shift_after_merge_next(list, count, row, merge_col);
         }
     }
+    undo_end_group();
 
     mcursors_normalize_from_list(list, count);
     free(list);
@@ -751,6 +764,29 @@ static void delete_range(int sy, int sx, int ey, int ex)
     E.cx = ex;
     while (E.cy > sy || E.cx > sx) {
         buffer_delete_char();
+    }
+}
+
+static void linewise_delete_bounds(int *sy, int *sx, int *ey, int *ex)
+{
+    *sx = 0;
+    if (*ey + 1 < E.numrows) {
+        *ey = *ey + 1;
+        *ex = 0;
+    } else if (*sy > 0) {
+        *sy = *sy - 1;
+        *sx = E.row[*sy].size;
+        *ex = E.row[*ey].size;
+    } else {
+        *ex = (*ey < E.numrows) ? E.row[*ey].size : 0;
+    }
+}
+
+static void delete_empty_single_row_after_linewise(void)
+{
+    if (E.numrows == 1 && E.row[0].size == 0 && E.ends_with_newline) {
+        E.ends_with_newline = 0;
+        editor_mark_dirty();
     }
 }
 
@@ -858,18 +894,17 @@ static void cut_selection_or_line(void)
 
     int dsy = sy, dsx = sx, dey = ey, dex = ex;
     if (linewise) {
-        dsx = 0;
-        if (dey + 1 < E.numrows) {
-            dey = dey + 1;
-            dex = 0;
-        } else {
-            dex = (dey < E.numrows) ? E.row[dey].size : 0;
-        }
+        linewise_delete_bounds(&dsy, &dsx, &dey, &dex);
     }
 
     delete_range(dsy, dsx, dey, dex);
+    if (linewise)
+        delete_empty_single_row_after_linewise();
     E.cy = sy;
+    if (E.cy >= E.numrows) E.cy = E.numrows ? E.numrows - 1 : 0;
     E.cx = sx;
+    if (E.cy < E.numrows && E.cx > E.row[E.cy].size)
+        E.cx = E.row[E.cy].size;
     selection_clear();
 }
 
@@ -880,6 +915,18 @@ static void paste_linewise(void)
     if (E.numrows == 0 || E.cy >= E.numrows) {
         E.cy = E.numrows;
         E.cx = 0;
+    }
+
+    if (E.numrows == 0) {
+        for (int i = 0; i < E.clipboard_len; i++) {
+            if (E.clipboard[i] == '\n') {
+                if (i == E.clipboard_len - 1) break;
+                mcursors_apply_newline();
+            } else {
+                mcursors_apply_insert_char(E.clipboard[i]);
+            }
+        }
+        return;
     }
 
     if (!mcursors_active()) {
@@ -938,18 +985,17 @@ static void delete_active_selection_only(void)
 
     int dsy = sy, dsx = sx, dey = ey, dex = ex;
     if (linewise) {
-        dsx = 0;
-        if (dey + 1 < E.numrows) {
-            dey = dey + 1;
-            dex = 0;
-        } else {
-            dex = (dey < E.numrows) ? E.row[dey].size : 0;
-        }
+        linewise_delete_bounds(&dsy, &dsx, &dey, &dex);
     }
 
     delete_range(dsy, dsx, dey, dex);
+    if (linewise)
+        delete_empty_single_row_after_linewise();
     E.cy = sy;
+    if (E.cy >= E.numrows) E.cy = E.numrows ? E.numrows - 1 : 0;
     E.cx = sx;
+    if (E.cy < E.numrows && E.cx > E.row[E.cy].size)
+        E.cx = E.row[E.cy].size;
     selection_clear();
 }
 
@@ -1093,6 +1139,11 @@ void input_process_keypress(void)
             handled = 1;
             break;
         case CTRL_KEY('v'):
+            if (selection_active() && !clipboard_has_text()) {
+                paste_clipboard();
+                handled = 1;
+                break;
+            }
             if (selection_active())
                 delete_active_selection_only();
             paste_clipboard();
@@ -1228,6 +1279,10 @@ void input_process_keypress(void)
                     break;
 
                 case 'p':
+                    if (selection_active() && !clipboard_has_text()) {
+                        paste_clipboard();
+                        break;
+                    }
                     if (selection_active())
                         delete_active_selection_only();
                     paste_clipboard();

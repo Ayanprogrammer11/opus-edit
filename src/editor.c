@@ -589,6 +589,7 @@ static void editor_buffer_restore(editor_buffer *buf)
     if (E.cx < 0) E.cx = 0;
     if (E.cy < E.numrows && E.cx > E.row[E.cy].size)
         E.cx = E.row[E.cy].size;
+    output_invalidate_wrap_cache();
 }
 
 static int editor_buffer_ensure_capacity(int needed)
@@ -628,6 +629,7 @@ static void editor_buffer_switch_to(int idx)
     editor_buffer_snapshot(&E.buffers[E.current_buffer]);
     E.current_buffer = idx;
     editor_buffer_restore(&E.buffers[idx]);
+    output_invalidate_wrap_cache();
     editor_clear_selection();
     editor_clear_mcursors();
 }
@@ -836,4 +838,5 @@ void editor_cleanup(void)
     E.mcursors = NULL;
     E.mcursor_count = 0;
     E.mcursor_capacity = 0;
+    output_free_wrap_cache();
 }

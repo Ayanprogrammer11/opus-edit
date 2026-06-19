@@ -15,6 +15,10 @@
 /* Recalculate scroll offsets so the cursor stays visible. */
 void output_scroll(void);
 
+/* Invalidate/free derived soft-wrap row mappings. */
+void output_invalidate_wrap_cache(void);
+void output_free_wrap_cache(void);
+
 /* Render the full screen: rows + status bar + message bar. */
 void output_refresh_screen(void);
 

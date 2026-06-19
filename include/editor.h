@@ -147,6 +147,12 @@ typedef struct editor_config {
     /* Terminal dimensions */
     int screenrows;
     int screencols;
+    /* Derived soft-wrap mapping cache for the current buffer. */
+    int  *render_prefix;
+    int   render_prefix_count;
+    int   render_prefix_width;
+    int   render_prefix_valid;
+    int   render_total_rows;
     /* File content */
     int   numrows;
     erow *row;

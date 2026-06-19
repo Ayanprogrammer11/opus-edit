@@ -462,17 +462,69 @@ static int output_row_render_lines(const erow *row)
     return (row->rsize - 1) / width + 1;
 }
 
-int output_total_render_rows(void)
+void output_invalidate_wrap_cache(void)
 {
+    E.render_prefix_valid = 0;
+}
+
+void output_free_wrap_cache(void)
+{
+    free(E.render_prefix);
+    E.render_prefix = NULL;
+    E.render_prefix_count = 0;
+    E.render_prefix_width = 0;
+    E.render_prefix_valid = 0;
+    E.render_total_rows = 0;
+}
+
+static int output_ensure_wrap_cache(void)
+{
+    int width = output_wrap_width();
+    if (width <= 0) width = 1;
+
+    if (E.render_prefix_valid
+        && E.render_prefix_width == width
+        && E.render_prefix_count == E.numrows + 1
+        && E.render_prefix) {
+        return 1;
+    }
+
+    if (E.numrows < 0 || E.numrows == INT_MAX)
+        return 0;
+
+    size_t need = (size_t)(E.numrows + 1);
+    if (need > SIZE_MAX / sizeof(int))
+        return 0;
+
+    int *prefix = realloc(E.render_prefix, need * sizeof(int));
+    if (!prefix)
+        return 0;
+
+    E.render_prefix = prefix;
+    E.render_prefix[0] = 0;
     int total = 0;
     for (int i = 0; i < E.numrows; i++) {
         int lines = output_row_render_lines(&E.row[i]);
         if (lines > INT_MAX - total) {
-            return INT_MAX;
+            total = INT_MAX;
+        } else if (total != INT_MAX) {
+            total += lines;
         }
-        total += lines;
+        E.render_prefix[i + 1] = total;
     }
-    return total;
+
+    E.render_total_rows = total;
+    E.render_prefix_count = E.numrows + 1;
+    E.render_prefix_width = width;
+    E.render_prefix_valid = 1;
+    return 1;
+}
+
+int output_total_render_rows(void)
+{
+    if (!output_ensure_wrap_cache())
+        return E.numrows > 0 ? E.numrows : 0;
+    return E.render_total_rows;
 }
 
 int output_row_render_index(int row_idx)
@@ -480,15 +532,9 @@ int output_row_render_index(int row_idx)
     if (row_idx <= 0) return 0;
     if (row_idx >= E.numrows) return output_total_render_rows();
 
-    int total = 0;
-    for (int i = 0; i < row_idx; i++) {
-        int lines = output_row_render_lines(&E.row[i]);
-        if (lines > INT_MAX - total) {
-            return INT_MAX;
-        }
-        total += lines;
-    }
-    return total;
+    if (!output_ensure_wrap_cache())
+        return row_idx;
+    return E.render_prefix[row_idx];
 }
 
 void output_render_row_to_file(int render_row, int *row_idx, int *row_line)
@@ -499,15 +545,29 @@ void output_render_row_to_file(int render_row, int *row_idx, int *row_line)
     int rr = render_row;
     if (rr < 0) rr = 0;
 
-    for (int i = 0; i < E.numrows; i++) {
-        int lines = output_row_render_lines(&E.row[i]);
-        if (rr < lines) {
-            if (row_idx) *row_idx = i;
-            if (row_line) *row_line = rr;
-            return;
+    if (!output_ensure_wrap_cache()) {
+        if (rr < E.numrows) {
+            if (row_idx) *row_idx = rr;
+            if (row_line) *row_line = 0;
         }
-        rr -= lines;
+        return;
     }
+
+    if (rr >= E.render_total_rows)
+        return;
+
+    int lo = 0;
+    int hi = E.numrows;
+    while (lo < hi) {
+        int mid = lo + (hi - lo) / 2;
+        if (E.render_prefix[mid + 1] <= rr)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+
+    if (row_idx) *row_idx = lo;
+    if (row_line) *row_line = rr - E.render_prefix[lo];
 }
 
 static int output_cursor_render_row(void)

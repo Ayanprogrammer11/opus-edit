@@ -60,6 +60,7 @@ static int stack_push_raw(undo_stack *s, const undo_op *op)
 
 static int next_group_id = 1;
 static int force_new_group = 0;
+static int explicit_group_id = 0;
 
 /*
  * Determine whether a new operation should join the current group
@@ -73,13 +74,16 @@ static int force_new_group = 0;
  */
 static int resolve_group_id(enum undo_op_type type, int row, int col)
 {
-    if (E.undo.count == 0)
-        return next_group_id++;
+    if (explicit_group_id)
+        return explicit_group_id;
 
     if (force_new_group) {
         force_new_group = 0;
         return next_group_id++;
     }
+
+    if (E.undo.count == 0)
+        return next_group_id++;
 
     const undo_op *prev = &E.undo.ops[E.undo.count - 1];
 
@@ -132,6 +136,19 @@ void undo_break_group(void)
     force_new_group = 1;
 }
 
+void undo_begin_group(void)
+{
+    if (!explicit_group_id) {
+        explicit_group_id = next_group_id++;
+        force_new_group = 0;
+    }
+}
+
+void undo_end_group(void)
+{
+    explicit_group_id = 0;
+}
+
 /* ── Reverse a single operation ───────────────────────────── */
 
 /*
@@ -144,8 +161,15 @@ static int apply_inverse(const undo_op *op)
     switch (op->type) {
         case UNDO_INSERT_CHAR:
             /* A char was inserted → delete it */
-            if (op->row >= 0 && op->row < E.numrows)
-                return buffer_row_delete_char(&E.row[op->row], op->col);
+            if (op->row >= 0 && op->row < E.numrows) {
+                if (!buffer_row_delete_char(&E.row[op->row], op->col))
+                    return 0;
+                if (E.numrows == 1 && E.row[0].size == 0
+                    && E.saved_len == 0) {
+                    buffer_delete_row(0);
+                }
+                return 1;
+            }
             return 0;
 
         case UNDO_DELETE_CHAR:
@@ -197,6 +221,10 @@ static int apply_forward(const undo_op *op)
 {
     switch (op->type) {
         case UNDO_INSERT_CHAR:
+            if (op->row == E.numrows && op->col == 0) {
+                if (!buffer_insert_row(E.numrows, "", 0))
+                    return 0;
+            }
             if (op->row >= 0 && op->row < E.numrows)
                 return buffer_row_insert_char(&E.row[op->row], op->col, op->c);
             return 0;

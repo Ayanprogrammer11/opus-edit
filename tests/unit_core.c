@@ -98,6 +98,7 @@ static void free_current_state(void)
         undo_stack_free(&buf->redo);
     }
     free(E.buffers);
+    free(E.render_prefix);
 }
 
 static void reset_editor_state(void)
