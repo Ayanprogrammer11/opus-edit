@@ -59,6 +59,7 @@ static int stack_push_raw(undo_stack *s, const undo_op *op)
 /* ── Group-id generation ──────────────────────────────────── */
 
 static int next_group_id = 1;
+static int force_new_group = 0;
 
 /*
  * Determine whether a new operation should join the current group
@@ -74,6 +75,11 @@ static int resolve_group_id(enum undo_op_type type, int row, int col)
 {
     if (E.undo.count == 0)
         return next_group_id++;
+
+    if (force_new_group) {
+        force_new_group = 0;
+        return next_group_id++;
+    }
 
     const undo_op *prev = &E.undo.ops[E.undo.count - 1];
 
@@ -119,6 +125,11 @@ void undo_push(enum undo_op_type type, int row, int col, int c)
 
     /* Any new edit invalidates the redo stack */
     undo_stack_clear(&E.redo);
+}
+
+void undo_break_group(void)
+{
+    force_new_group = 1;
 }
 
 /* ── Reverse a single operation ───────────────────────────── */
@@ -277,7 +288,7 @@ void undo_perform_undo(void)
     E.undo_recording = 1;
 
     if (did_undo) {
-        E.dirty++;
+        editor_refresh_dirty_from_saved();
         if (!failed)
             editor_set_status_message("Undo.");
     }
@@ -346,7 +357,7 @@ void undo_perform_redo(void)
     E.undo_recording = 1;
 
     if (did_redo) {
-        E.dirty++;
+        editor_refresh_dirty_from_saved();
         if (!failed)
             editor_set_status_message("Redo.");
     }

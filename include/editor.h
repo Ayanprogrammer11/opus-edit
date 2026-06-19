@@ -11,6 +11,7 @@
 
 #include <limits.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <termios.h>
 #include <time.h>
 #include "undo.h"
@@ -100,6 +101,8 @@ typedef struct editor_buffer {
     int   ends_with_newline;
     /* Status */
     int   dirty;
+    size_t saved_len;
+    uint64_t saved_hash;
     char *filename;
     /* Syntax */
     editor_syntax *syntax;
@@ -150,6 +153,8 @@ typedef struct editor_config {
     int   ends_with_newline;
     /* Status */
     int   dirty;
+    size_t saved_len;
+    uint64_t saved_hash;
     char *filename;
     char  statusmsg[256];
     time_t statusmsg_time;
@@ -205,6 +210,9 @@ void  editor_init(void);
 void  editor_cleanup(void);
 void  editor_set_status_message(const char *fmt, ...);
 int   editor_any_buffer_dirty(void);
+void  editor_mark_saved(void);
+void  editor_mark_dirty(void);
+void  editor_refresh_dirty_from_saved(void);
 void  editor_clear_selection(void);
 void  editor_clear_mcursors(void);
 char *editor_prompt(const char *prompt, void (*callback)(const char *, int));

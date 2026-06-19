@@ -89,6 +89,51 @@ int editor_any_buffer_dirty(void)
     return 0;
 }
 
+static void editor_content_fingerprint(size_t *out_len, uint64_t *out_hash)
+{
+    const uint64_t fnv_offset = 1469598103934665603ULL;
+    const uint64_t fnv_prime = 1099511628211ULL;
+    uint64_t hash = fnv_offset;
+    size_t len = 0;
+
+    for (int row_idx = 0; row_idx < E.numrows; row_idx++) {
+        erow *row = &E.row[row_idx];
+        for (int col = 0; col < row->size; col++) {
+            hash ^= (unsigned char)row->chars[col];
+            hash *= fnv_prime;
+            len++;
+        }
+        if (row_idx + 1 < E.numrows || E.ends_with_newline) {
+            hash ^= (unsigned char)'\n';
+            hash *= fnv_prime;
+            len++;
+        }
+    }
+
+    if (out_len) *out_len = len;
+    if (out_hash) *out_hash = hash;
+}
+
+void editor_mark_saved(void)
+{
+    editor_content_fingerprint(&E.saved_len, &E.saved_hash);
+    E.dirty = 0;
+    undo_break_group();
+}
+
+void editor_mark_dirty(void)
+{
+    E.dirty = 1;
+}
+
+void editor_refresh_dirty_from_saved(void)
+{
+    size_t len = 0;
+    uint64_t hash = 0;
+    editor_content_fingerprint(&len, &hash);
+    E.dirty = (len != E.saved_len || hash != E.saved_hash);
+}
+
 void editor_clear_selection(void)
 {
     E.sel_mode = SEL_NONE;
@@ -419,6 +464,8 @@ static void editor_buffer_init(editor_buffer *buf)
     buf->row = NULL;
     buf->ends_with_newline = 1;
     buf->dirty = 0;
+    buf->saved_len = 0;
+    buf->saved_hash = 1469598103934665603ULL;
     buf->filename = NULL;
     buf->syntax = NULL;
     buf->show_git_gutter = 1;
@@ -462,6 +509,8 @@ static void editor_buffer_free(editor_buffer *buf)
     buf->numrows = 0;
     buf->ends_with_newline = 1;
     buf->dirty = 0;
+    buf->saved_len = 0;
+    buf->saved_hash = 1469598103934665603ULL;
     buf->git_root = NULL;
     buf->git_gitdir = NULL;
     buf->git_relpath = NULL;
@@ -483,6 +532,8 @@ static void editor_buffer_snapshot(editor_buffer *buf)
     buf->row = E.row;
     buf->ends_with_newline = E.ends_with_newline;
     buf->dirty = E.dirty;
+    buf->saved_len = E.saved_len;
+    buf->saved_hash = E.saved_hash;
     buf->filename = E.filename;
     buf->syntax = E.syntax;
     buf->show_git_gutter = E.show_git_gutter;
@@ -513,6 +564,8 @@ static void editor_buffer_restore(editor_buffer *buf)
     E.row = buf->row;
     E.ends_with_newline = buf->ends_with_newline;
     E.dirty = buf->dirty;
+    E.saved_len = buf->saved_len;
+    E.saved_hash = buf->saved_hash;
     E.filename = buf->filename;
     E.syntax = buf->syntax;
     E.show_git_gutter = buf->show_git_gutter;
@@ -734,6 +787,8 @@ void editor_init(void)
         E.row = NULL;
         E.ends_with_newline = 1;
         E.dirty = 0;
+        E.saved_len = 0;
+        E.saved_hash = 1469598103934665603ULL;
         E.filename = NULL;
         E.syntax = NULL;
         E.show_git_gutter = 1;

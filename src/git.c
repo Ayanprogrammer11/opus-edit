@@ -713,40 +713,75 @@ static void git_compute_signs_lcs(void)
         return;
     }
 
-    size_t cells = (size_t)(n + 1) * (size_t)(m + 1);
+    char *signs = malloc((size_t)m);
+    if (!signs) return;
+    for (int i = 0; i < m; i++) signs[i] = ' ';
+
+    int prefix = 0;
+    while (prefix < n && prefix < m &&
+           strcmp(E.git_base_lines[prefix], E.row[prefix].chars) == 0) {
+        prefix++;
+    }
+
+    int suffix = 0;
+    while (prefix + suffix < n && prefix + suffix < m &&
+           strcmp(E.git_base_lines[n - suffix - 1],
+                  E.row[m - suffix - 1].chars) == 0) {
+        suffix++;
+    }
+
+    int bn = n - prefix - suffix;
+    int bm = m - prefix - suffix;
+
+    if (bn == 0) {
+        for (int j = 0; j < bm; j++)
+            signs[prefix + j] = '+';
+        E.git_signs = signs;
+        E.git_signs_count = m;
+        return;
+    }
+
+    if (bm == 0) {
+        int anchor = (prefix < m) ? prefix : (m - 1);
+        if (anchor >= 0 && anchor < m)
+            signs[anchor] = '-';
+        E.git_signs = signs;
+        E.git_signs_count = m;
+        return;
+    }
+
+    size_t cells = (size_t)(bn + 1) * (size_t)(bm + 1);
     if (cells > 4000000U) {
-        /* Fallback: if sizes are huge, mark all as modified. */
-        git_mark_all('-');
+        for (int j = 0; j < bm; j++)
+            signs[prefix + j] = '-';
+        E.git_signs = signs;
+        E.git_signs_count = m;
         return;
     }
 
     int *dp = calloc(cells, sizeof(int));
     if (!dp) {
+        free(signs);
         git_mark_all('-');
         return;
     }
 
-    for (int i = n - 1; i >= 0; i--) {
-        for (int j = m - 1; j >= 0; j--) {
-            int idx = i * (m + 1) + j;
-            if (strcmp(E.git_base_lines[i], E.row[j].chars) == 0) {
-                dp[idx] = dp[(i + 1) * (m + 1) + (j + 1)] + 1;
+    int width = bm + 1;
+    for (int i = bn - 1; i >= 0; i--) {
+        for (int j = bm - 1; j >= 0; j--) {
+            int idx = i * width + j;
+            if (strcmp(E.git_base_lines[prefix + i],
+                       E.row[prefix + j].chars) == 0) {
+                dp[idx] = dp[(i + 1) * width + (j + 1)] + 1;
             } else {
-                int a = dp[(i + 1) * (m + 1) + j];
-                int b = dp[i * (m + 1) + (j + 1)];
+                int a = dp[(i + 1) * width + j];
+                int b = dp[i * width + (j + 1)];
                 dp[idx] = (a > b) ? a : b;
             }
         }
     }
 
-    char *signs = malloc((size_t)m);
-    if (!signs) {
-        free(dp);
-        return;
-    }
-    for (int i = 0; i < m; i++) signs[i] = ' ';
-
-    int *ins_idx = malloc((size_t)m * sizeof(int));
+    int *ins_idx = malloc((size_t)bm * sizeof(int));
     if (!ins_idx) {
         free(signs);
         free(dp);
@@ -757,8 +792,10 @@ static void git_compute_signs_lcs(void)
     int hunk_has_del = 0;
 
     int i = 0, j = 0;
-    while (i < n || j < m) {
-        if (i < n && j < m && strcmp(E.git_base_lines[i], E.row[j].chars) == 0) {
+    while (i < bn || j < bm) {
+        if (i < bn && j < bm &&
+            strcmp(E.git_base_lines[prefix + i],
+                   E.row[prefix + j].chars) == 0) {
             if (ins_count > 0) {
                 char mark = hunk_has_del ? '-' : '+';
                 for (int k = 0; k < ins_count; k++)
@@ -766,15 +803,15 @@ static void git_compute_signs_lcs(void)
                 ins_count = 0;
                 hunk_has_del = 0;
             } else if (hunk_has_del) {
-                signs[j] = '-';
+                signs[prefix + j] = '-';
                 hunk_has_del = 0;
             }
             i++;
             j++;
-        } else if (j < m && (i == n
-                   || dp[i * (m + 1) + (j + 1)] >= dp[(i + 1) * (m + 1) + j])) {
-            if (ins_count < m)
-                ins_idx[ins_count++] = j;
+        } else if (j < bm && (i == bn
+                   || dp[i * width + (j + 1)] >= dp[(i + 1) * width + j])) {
+            if (ins_count < bm)
+                ins_idx[ins_count++] = prefix + j;
             j++;
         } else {
             hunk_has_del = 1;
@@ -787,7 +824,8 @@ static void git_compute_signs_lcs(void)
         for (int k = 0; k < ins_count; k++)
             signs[ins_idx[k]] = mark;
     } else if (hunk_has_del && m > 0) {
-        signs[m - 1] = '-';
+        int anchor = (prefix + bm < m) ? (prefix + bm) : (m - 1);
+        signs[anchor] = '-';
     }
 
     free(ins_idx);

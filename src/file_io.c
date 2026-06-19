@@ -42,6 +42,8 @@ static void file_reset_buffer_state(void)
     E.numrows = 0;
     E.ends_with_newline = 1;
     E.dirty = 0;
+    E.saved_len = 0;
+    E.saved_hash = 1469598103934665603ULL;
     E.cx = 0;
     E.cy = 0;
     E.rx = 0;
@@ -233,7 +235,7 @@ int file_open(const char *filename)
     E.row = loaded_rows;
     E.numrows = loaded_count;
     E.ends_with_newline = loaded_ends_with_newline;
-    E.dirty = 0;
+    editor_mark_saved();
 
     output_select_syntax_highlight();
     git_on_file_change();
@@ -499,7 +501,7 @@ static int file_write_to_path(const char *path)
     free(resolved_path);
     free(buf);
 
-    E.dirty = 0;
+    editor_mark_saved();
     editor_set_status_message("%d bytes written to %s", len, path);
     return 1;
 }

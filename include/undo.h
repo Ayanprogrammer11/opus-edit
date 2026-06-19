@@ -58,6 +58,9 @@ void undo_stack_clear(undo_stack *s);
  */
 void undo_push(enum undo_op_type type, int row, int col, int c);
 
+/* Force the next recorded operation to start a fresh undo group. */
+void undo_break_group(void);
+
 /* Execute undo: pop one group, reverse it, push inverse to redo. */
 void undo_perform_undo(void);
 

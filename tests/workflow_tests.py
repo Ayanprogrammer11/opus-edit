@@ -275,6 +275,17 @@ def scenario_undo_redo(binary: Path, root: Path) -> None:
     assert_file(target, b"abc\n")
 
 
+def scenario_undo_back_to_saved_quits_cleanly(binary: Path, root: Path) -> None:
+    target = root / "undo-clean.txt"
+    target.write_bytes(b"abc\n")
+    with EditorSession(binary, target, "undo back to saved is clean") as ed:
+        ed.send(b"X")
+        ed.send(CTRL_Z)
+        ed.send(CTRL_Q)
+        ed.wait_exit()
+    assert_file(target, b"abc\n")
+
+
 def scenario_newline_undo_redo(binary: Path, root: Path) -> None:
     target = root / "newline-redo.txt"
     with EditorSession(binary, target, "newline undo redo") as ed:
@@ -843,6 +854,7 @@ SCENARIOS = [
     scenario_basic_edit_save_quit,
     scenario_fast_escape_preserves_following_keys,
     scenario_undo_redo,
+    scenario_undo_back_to_saved_quits_cleanly,
     scenario_newline_undo_redo,
     scenario_command_trim_duplicate,
     scenario_visual_line_copy_paste,

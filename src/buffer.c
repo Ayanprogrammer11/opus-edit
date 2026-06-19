@@ -148,7 +148,7 @@ int buffer_insert_row(int at, const char *s, size_t len)
 
     E.numrows++;
     buffer_update_row(&E.row[at]);
-    E.dirty++;
+    editor_mark_dirty();
     git_mark_dirty();
     return 1;
 }
@@ -180,7 +180,7 @@ void buffer_delete_row(int at)
     E.numrows--;
     if (at < E.numrows)
         output_update_syntax(&E.row[at]);
-    E.dirty++;
+    editor_mark_dirty();
     git_mark_dirty();
 }
 
@@ -206,7 +206,7 @@ int buffer_row_insert_char(erow *row, int at, int c)
     row->chars[at] = (char)c;
 
     buffer_update_row(row);
-    E.dirty++;
+    editor_mark_dirty();
     git_mark_dirty();
     return 1;
 }
@@ -221,7 +221,7 @@ int buffer_row_delete_char(erow *row, int at)
     row->size--;
 
     buffer_update_row(row);
-    E.dirty++;
+    editor_mark_dirty();
     git_mark_dirty();
     return 1;
 }
@@ -247,7 +247,7 @@ int buffer_row_append_string(erow *row, const char *s, size_t len)
     row->chars[row->size] = '\0';
 
     buffer_update_row(row);
-    E.dirty++;
+    editor_mark_dirty();
     git_mark_dirty();
     return 1;
 }

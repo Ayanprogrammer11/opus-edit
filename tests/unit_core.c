@@ -107,6 +107,8 @@ static void reset_editor_state(void)
     E.screenrows = 22;
     E.screencols = 80;
     E.ends_with_newline = 1;
+    E.saved_len = 0;
+    E.saved_hash = 1469598103934665603ULL;
     E.mode = MODE_INSERT;
     E.show_line_numbers = 1;
     E.auto_indent = 1;
@@ -211,21 +213,30 @@ static void test_insert_delete_undo_redo_grouping(void)
     insert_text("abc");
     CHECK_INT(E.numrows, 1);
     CHECK_STR(E.row[0].chars, "abc");
+    CHECK_INT(E.dirty, 1);
+    editor_mark_saved();
+    CHECK_INT(E.dirty, 0);
+
+    insert_text("d");
+    CHECK_STR(E.row[0].chars, "abcd");
+    CHECK_INT(E.dirty, 1);
 
     undo_perform_undo();
     CHECK_INT(E.numrows, 1);
-    CHECK_STR(E.row[0].chars, "");
-    CHECK_INT(E.cx, 0);
-
-    undo_perform_redo();
     CHECK_STR(E.row[0].chars, "abc");
     CHECK_INT(E.cx, 3);
+    CHECK_INT(E.dirty, 0);
+
+    undo_perform_redo();
+    CHECK_STR(E.row[0].chars, "abcd");
+    CHECK_INT(E.cx, 4);
+    CHECK_INT(E.dirty, 1);
 
     buffer_delete_char();
     buffer_delete_char();
-    CHECK_STR(E.row[0].chars, "a");
+    CHECK_STR(E.row[0].chars, "ab");
     undo_perform_undo();
-    CHECK_STR(E.row[0].chars, "abc");
+    CHECK_STR(E.row[0].chars, "abcd");
 }
 
 static void test_empty_newline_undo_redo(void)
