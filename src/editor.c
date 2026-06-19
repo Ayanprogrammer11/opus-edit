@@ -137,7 +137,7 @@ static char *editor_prompt_internal(const char *prompt,
                 if (callback) callback(buf, c);
                 return buf;
             }
-        } else if (c < 128 && !iscntrl((unsigned char)c)) {
+        } else if (c >= 32 && c <= 255 && !iscntrl((unsigned char)c)) {
             if (buflen + 1 >= bufsize) {
                 if (bufsize > SIZE_MAX / 2) {
                     editor_set_status_message("Input too long.");
@@ -417,6 +417,7 @@ static void editor_buffer_init(editor_buffer *buf)
     buf->coloff = 0;
     buf->numrows = 0;
     buf->row = NULL;
+    buf->ends_with_newline = 1;
     buf->dirty = 0;
     buf->filename = NULL;
     buf->syntax = NULL;
@@ -459,6 +460,7 @@ static void editor_buffer_free(editor_buffer *buf)
     buf->row = NULL;
     buf->filename = NULL;
     buf->numrows = 0;
+    buf->ends_with_newline = 1;
     buf->dirty = 0;
     buf->git_root = NULL;
     buf->git_gitdir = NULL;
@@ -479,6 +481,7 @@ static void editor_buffer_snapshot(editor_buffer *buf)
     buf->coloff = E.coloff;
     buf->numrows = E.numrows;
     buf->row = E.row;
+    buf->ends_with_newline = E.ends_with_newline;
     buf->dirty = E.dirty;
     buf->filename = E.filename;
     buf->syntax = E.syntax;
@@ -508,6 +511,7 @@ static void editor_buffer_restore(editor_buffer *buf)
     E.coloff = buf->coloff;
     E.numrows = buf->numrows;
     E.row = buf->row;
+    E.ends_with_newline = buf->ends_with_newline;
     E.dirty = buf->dirty;
     E.filename = buf->filename;
     E.syntax = buf->syntax;
@@ -728,6 +732,7 @@ void editor_init(void)
         E.coloff = 0;
         E.numrows = 0;
         E.row = NULL;
+        E.ends_with_newline = 1;
         E.dirty = 0;
         E.filename = NULL;
         E.syntax = NULL;

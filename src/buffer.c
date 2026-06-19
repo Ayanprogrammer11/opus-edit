@@ -146,8 +146,8 @@ int buffer_insert_row(int at, const char *s, size_t len)
     E.row[at].hl_open_comment = 0;
     E.row[at].hl_open_string  = 0;
 
-    buffer_update_row(&E.row[at]);
     E.numrows++;
+    buffer_update_row(&E.row[at]);
     E.dirty++;
     git_mark_dirty();
     return 1;
@@ -178,6 +178,8 @@ void buffer_delete_row(int at)
         E.row[j].idx = j;
 
     E.numrows--;
+    if (at < E.numrows)
+        output_update_syntax(&E.row[at]);
     E.dirty++;
     git_mark_dirty();
 }
@@ -487,7 +489,9 @@ char *buffer_rows_to_string(int *buflen)
             *buflen = -1;
             return NULL;
         }
-        size_t add = (size_t)E.row[j].size + 1; /* +1 for '\n' */
+        size_t add = (size_t)E.row[j].size;
+        if (j + 1 < E.numrows || E.ends_with_newline)
+            add++; /* newline separator or final newline */
         if (totlen > SIZE_MAX - add) {
             *buflen = -1;
             return NULL;
@@ -508,8 +512,10 @@ char *buffer_rows_to_string(int *buflen)
     for (int j = 0; j < E.numrows; j++) {
         memcpy(p, E.row[j].chars, (size_t)E.row[j].size);
         p += E.row[j].size;
-        *p = '\n';
-        p++;
+        if (j + 1 < E.numrows || E.ends_with_newline) {
+            *p = '\n';
+            p++;
+        }
     }
     return buf;
 }

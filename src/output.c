@@ -516,13 +516,23 @@ static int output_cursor_render_row(void)
         ? output_row_render_index(E.cy)
         : output_total_render_rows();
     int width = output_wrap_width();
-    return base + (E.rx / width);
+    int rx = E.rx;
+    if (E.cy < E.numrows && E.cx == E.row[E.cy].size
+        && rx > 0 && rx % width == 0) {
+        rx--;
+    }
+    return base + (rx / width);
 }
 
 static int output_cursor_render_col(void)
 {
     int width = output_wrap_width();
-    return (E.rx % width) + output_gutter_width();
+    int rx = E.rx;
+    if (E.cy < E.numrows && E.cx == E.row[E.cy].size
+        && rx > 0 && rx % width == 0) {
+        rx--;
+    }
+    return (rx % width) + output_gutter_width();
 }
 
 /* ── Selection helpers ──────────────────────────────────── */

@@ -106,6 +106,7 @@ static void reset_editor_state(void)
     memset(&E, 0, sizeof(E));
     E.screenrows = 22;
     E.screencols = 80;
+    E.ends_with_newline = 1;
     E.mode = MODE_INSERT;
     E.show_line_numbers = 1;
     E.auto_indent = 1;
@@ -409,6 +410,7 @@ static void test_file_save_open_and_permissions(void)
     if (new_path) {
         CHECK(file_open(new_path));
         CHECK_INT(E.numrows, 0);
+        CHECK_INT(E.ends_with_newline, 1);
         CHECK_INT(E.dirty, 0);
         CHECK_STR(E.filename, new_path);
         CHECK(!dir_has_temp_for(dir, "new.txt"));
@@ -418,6 +420,135 @@ static void test_file_save_open_and_permissions(void)
     unlink(path);
     rmdir(dir);
     free(path);
+}
+
+static void test_file_preserves_missing_final_newline(void)
+{
+    reset_editor_state();
+    char tmpl[] = "/tmp/opusedit-nonewline-XXXXXX";
+    char *dir = mkdtemp(tmpl);
+    CHECK(dir != NULL);
+    if (!dir) return;
+
+    char *path = join_path(dir, "plain.txt");
+    CHECK(path != NULL);
+    if (!path) {
+        rmdir(dir);
+        return;
+    }
+
+    FILE *fp = fopen(path, "wb");
+    CHECK(fp != NULL);
+    if (fp) {
+        CHECK_INT((int)fwrite("plain", 1, 5, fp), 5);
+        CHECK(fclose(fp) == 0);
+    }
+
+    CHECK(file_open(path));
+    CHECK_INT(E.ends_with_newline, 0);
+    CHECK(file_save_as(path));
+    size_t file_len = 0;
+    char *contents = read_file(path, &file_len);
+    CHECK_BYTES(contents, (int)file_len, "plain");
+    free(contents);
+
+    fp = fopen(path, "wb");
+    CHECK(fp != NULL);
+    if (fp) {
+        CHECK_INT((int)fwrite("plain\n", 1, 6, fp), 6);
+        CHECK(fclose(fp) == 0);
+    }
+
+    CHECK(file_open(path));
+    CHECK_INT(E.ends_with_newline, 1);
+    CHECK(file_save_as(path));
+    contents = read_file(path, &file_len);
+    CHECK_BYTES(contents, (int)file_len, "plain\n");
+    free(contents);
+
+    unlink(path);
+    rmdir(dir);
+    free(path);
+}
+
+static void test_file_save_symlink_umask_and_long_name(void)
+{
+    reset_editor_state();
+    char tmpl[] = "/tmp/opusedit-save-edges-XXXXXX";
+    char *dir = mkdtemp(tmpl);
+    CHECK(dir != NULL);
+    if (!dir) return;
+
+    char *target = join_path(dir, "target.txt");
+    char *link = join_path(dir, "link.txt");
+    CHECK(target != NULL);
+    CHECK(link != NULL);
+    if (!target || !link) {
+        free(target);
+        free(link);
+        rmdir(dir);
+        return;
+    }
+
+    FILE *fp = fopen(target, "wb");
+    CHECK(fp != NULL);
+    if (fp) {
+        CHECK_INT((int)fwrite("base\n", 1, 5, fp), 5);
+        CHECK(fclose(fp) == 0);
+    }
+
+    CHECK(symlink(target, link) == 0);
+    CHECK(file_open(link));
+    buffer_insert_char('!');
+    file_save();
+    size_t file_len = 0;
+    char *contents = read_file(target, &file_len);
+    CHECK_BYTES(contents, (int)file_len, "!base\n");
+    free(contents);
+    struct stat st;
+    CHECK(lstat(link, &st) == 0);
+    CHECK(S_ISLNK(st.st_mode));
+
+    reset_editor_state();
+    char *umask_path = join_path(dir, "umask.txt");
+    CHECK(umask_path != NULL);
+    if (umask_path) {
+        CHECK(buffer_insert_row(0, "secret", 6));
+        mode_t old_mask = umask(0077);
+        CHECK(file_save_as(umask_path));
+        (void)umask(old_mask);
+        CHECK(stat(umask_path, &st) == 0);
+        CHECK_INT((int)(st.st_mode & 0777), 0600);
+        unlink(umask_path);
+        free(umask_path);
+    }
+
+    reset_editor_state();
+    int name_len = NAME_MAX > 20 ? NAME_MAX - 5 : 20;
+    char *name = malloc((size_t)name_len + 1);
+    CHECK(name != NULL);
+    if (name) {
+        memset(name, 'a', (size_t)name_len);
+        name[name_len] = '\0';
+        char *long_path = join_path(dir, name);
+        CHECK(long_path != NULL);
+        if (long_path) {
+            CHECK(buffer_insert_row(0, "long", 4));
+            CHECK(file_save_as(long_path));
+            contents = read_file(long_path, &file_len);
+            CHECK_BYTES(contents, (int)file_len, "long\n");
+            free(contents);
+            unlink(long_path);
+            free(long_path);
+        }
+        free(name);
+    }
+
+    unlink(link);
+    unlink(target);
+    rmdir(dir);
+    free(link);
+    free(target);
 }
 
 int main(void)
@@ -430,6 +561,8 @@ int main(void)
     test_append_buffer_and_save_rejections();
     test_wrap_mapping_and_syntax();
     test_file_save_open_and_permissions();
+    test_file_preserves_missing_final_newline();
+    test_file_save_symlink_umask_and_long_name();
     reset_editor_state();
 
     if (tests_failed) {

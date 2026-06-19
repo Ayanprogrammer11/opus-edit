@@ -21,10 +21,34 @@
 
 /* ── Low-level key reading ────────────────────────────────── */
 
-int input_read_key(void)
+static unsigned char pending_input[16];
+static int pending_input_len = 0;
+
+static void input_push_pending(const char *buf, int len)
 {
-    int nread;
-    char c;
+    if (!buf || len <= 0) return;
+    if (len > (int)sizeof(pending_input) - pending_input_len)
+        return;
+    memmove(pending_input + len, pending_input, (size_t)pending_input_len);
+    memcpy(pending_input, buf, (size_t)len);
+    pending_input_len += len;
+}
+
+static int input_pop_pending(char *c)
+{
+    if (pending_input_len <= 0) return 0;
+    *c = (char)pending_input[0];
+    pending_input_len--;
+    if (pending_input_len > 0) {
+        memmove(pending_input, pending_input + 1, (size_t)pending_input_len);
+    }
+    return 1;
+}
+
+static int input_read_byte(char *c, int wait)
+{
+    if (input_pop_pending(c))
+        return 1;
 
     for (;;) {
         if (terminal_exit_requested()) {
@@ -32,48 +56,80 @@ int input_read_key(void)
             exit(0);
         }
 
-        nread = (int)read(STDIN_FILENO, &c, 1);
+        int nread = (int)read(STDIN_FILENO, c, 1);
         if (nread == 1) {
             if (terminal_exit_requested()) {
                 editor_cleanup();
                 exit(0);
             }
-            break;
+            return 1;
         }
 
         if (nread == 0 || (nread == -1 && (errno == EAGAIN || errno == EINTR))) {
             if (terminal_apply_pending_resize()) {
                 output_refresh_screen();
             }
+            if (!wait)
+                return 0;
             continue;
         }
 
         if (nread == -1) {
-            /* Fatal read error */
             perror("read");
             exit(1);
         }
     }
+}
+
+static int input_is_csi_final(char c)
+{
+    unsigned char u = (unsigned char)c;
+    return u >= 0x40 && u <= 0x7e;
+}
+
+static void input_drain_csi(void)
+{
+    char c;
+    while (input_read_byte(&c, 0)) {
+        if (input_is_csi_final(c))
+            break;
+    }
+}
+
+int input_read_key(void)
+{
+    char c;
+
+    (void)input_read_byte(&c, 1);
 
     /* Escape sequence handling */
     if (c == '\x1b') {
         char seq[5];
 
-        if (read(STDIN_FILENO, &seq[0], 1) != 1) return '\x1b';
-        if (read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b';
+        if (!input_read_byte(&seq[0], 0)) return '\x1b';
+        if (seq[0] != '[' && seq[0] != 'O') {
+            input_push_pending(&seq[0], 1);
+            return '\x1b';
+        }
+        if (!input_read_byte(&seq[1], 0)) {
+            input_push_pending(&seq[0], 1);
+            return '\x1b';
+        }
 
         if (seq[0] == '[') {
             if (seq[1] == '<') {
                 char buf[32];
                 int idx = 0;
                 while (idx < (int)sizeof(buf) - 1) {
-                    if (read(STDIN_FILENO, &buf[idx], 1) != 1) return '\x1b';
+                    if (!input_read_byte(&buf[idx], 0)) return '\x1b';
                     if (buf[idx] == 'm' || buf[idx] == 'M') {
                         idx++;
                         break;
                     }
                     idx++;
                 }
+                if (idx == (int)sizeof(buf) - 1)
+                    input_drain_csi();
                 buf[idx] = '\0';
                 int b = 0, x = 0, y = 0;
                 char type = '\0';
@@ -86,7 +142,7 @@ int input_read_key(void)
                 return '\x1b';
             }
             if (seq[1] >= '0' && seq[1] <= '9') {
-                if (read(STDIN_FILENO, &seq[2], 1) != 1) return '\x1b';
+                if (!input_read_byte(&seq[2], 0)) return '\x1b';
 
                 if (seq[2] == '~') {
                     /* \x1b[N~ sequences */
@@ -101,8 +157,12 @@ int input_read_key(void)
                     }
                 } else if (seq[2] == ';') {
                     /* Modified keys: \x1b[1;5C etc. */
-                    if (read(STDIN_FILENO, &seq[3], 1) != 1) return '\x1b';
-                    if (read(STDIN_FILENO, &seq[4], 1) != 1) return '\x1b';
+                    if (!input_read_byte(&seq[3], 0)) return '\x1b';
+                    if (!input_read_byte(&seq[4], 0)) return '\x1b';
+                    if (!input_is_csi_final(seq[4])) {
+                        input_drain_csi();
+                        return '\x1b';
+                    }
                     if (seq[3] == '5') {
                         switch (seq[4]) {
                             case 'A': return CTRL_ARROW_UP;
@@ -118,6 +178,8 @@ int input_read_key(void)
                         case 'C': return ARROW_RIGHT;
                         case 'D': return ARROW_LEFT;
                     }
+                } else if (!input_is_csi_final(seq[2])) {
+                    input_drain_csi();
                 }
             } else {
                 /* \x1b[X single-char sequences */
@@ -129,6 +191,8 @@ int input_read_key(void)
                     case 'H': return HOME_KEY;
                     case 'F': return END_KEY;
                 }
+                if (!input_is_csi_final(seq[1]))
+                    input_drain_csi();
             }
         } else if (seq[0] == 'O') {
             /* \x1bOX sequences (some terminals) */

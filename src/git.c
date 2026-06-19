@@ -658,6 +658,8 @@ static char **git_split_lines(const unsigned char *data, size_t len, int *out_co
     size_t start = 0;
     int idx = 0;
     for (size_t i = 0; i <= len; i++) {
+        if (i == len && start == len)
+            break;
         if (i == len || data[i] == '\n') {
             size_t line_len = i - start;
             if (line_len > 0 && data[start + line_len - 1] == '\r')
@@ -763,6 +765,9 @@ static void git_compute_signs_lcs(void)
                     signs[ins_idx[k]] = mark;
                 ins_count = 0;
                 hunk_has_del = 0;
+            } else if (hunk_has_del) {
+                signs[j] = '-';
+                hunk_has_del = 0;
             }
             i++;
             j++;
@@ -781,6 +786,8 @@ static void git_compute_signs_lcs(void)
         char mark = hunk_has_del ? '-' : '+';
         for (int k = 0; k < ins_count; k++)
             signs[ins_idx[k]] = mark;
+    } else if (hunk_has_del && m > 0) {
+        signs[m - 1] = '-';
     }
 
     free(ins_idx);

@@ -97,6 +97,7 @@ typedef struct editor_buffer {
     /* File content */
     int   numrows;
     erow *row;
+    int   ends_with_newline;
     /* Status */
     int   dirty;
     char *filename;
@@ -146,6 +147,7 @@ typedef struct editor_config {
     /* File content */
     int   numrows;
     erow *row;
+    int   ends_with_newline;
     /* Status */
     int   dirty;
     char *filename;

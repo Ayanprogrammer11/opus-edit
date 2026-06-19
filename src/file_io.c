@@ -19,6 +19,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#ifndef ENOTSUP
+#define ENOTSUP EOPNOTSUPP
+#endif
+
 /* ── Platform-specific open flags ─────────────────────────── */
 #ifdef __APPLE__
     /* macOS supports O_DSYNC since 10.12, but O_SYNC is always safe */
@@ -36,6 +40,7 @@ static void file_reset_buffer_state(void)
     free(E.row);
     E.row = NULL;
     E.numrows = 0;
+    E.ends_with_newline = 1;
     E.dirty = 0;
     E.cx = 0;
     E.cy = 0;
@@ -168,12 +173,14 @@ int file_open(const char *filename)
 
     erow *loaded_rows = NULL;
     int loaded_count = 0;
+    int loaded_ends_with_newline = exists ? 0 : 1;
     char  *line    = NULL;
     size_t linecap = 0;
     ssize_t linelen;
 
     if (fp) {
         while ((linelen = getline(&line, &linecap, fp)) != -1) {
+            loaded_ends_with_newline = (linelen > 0 && line[linelen - 1] == '\n');
             /* Strip trailing newline / carriage-return */
             while (linelen > 0 &&
                    (line[linelen - 1] == '\n' || line[linelen - 1] == '\r'))
@@ -225,6 +232,7 @@ int file_open(const char *filename)
     E.filename = copy;
     E.row = loaded_rows;
     E.numrows = loaded_count;
+    E.ends_with_newline = loaded_ends_with_newline;
     E.dirty = 0;
 
     output_select_syntax_highlight();
@@ -259,29 +267,19 @@ static char *file_dirname_dup(const char *path)
     return dir;
 }
 
-static const char *file_basename_ptr(const char *path)
+static char *file_temp_template(const char *dir)
 {
-    const char *slash = strrchr(path, '/');
-    return slash ? slash + 1 : path;
-}
-
-static char *file_temp_template(const char *dir, const char *base)
-{
-    static const char suffix[] = ".tmp.XXXXXX";
+    static const char name[] = ".opusedit.XXXXXX";
     size_t dlen = strlen(dir);
-    size_t blen = strlen(base);
     int need_sep = !(dlen == 1 && dir[0] == '/');
     size_t sep_len = need_sep ? 1U : 0U;
 
-    if (blen == 0) return NULL;
     if (dlen > SIZE_MAX - sep_len
-        || dlen + sep_len > SIZE_MAX - 1U
-        || dlen + sep_len + 1U > SIZE_MAX - blen
-        || dlen + sep_len + 1U + blen > SIZE_MAX - sizeof(suffix)) {
+        || dlen + sep_len > SIZE_MAX - sizeof(name)) {
         return NULL;
     }
 
-    size_t len = dlen + sep_len + 1U + blen + sizeof(suffix);
+    size_t len = dlen + sep_len + sizeof(name);
     char *tmpl = malloc(len);
     if (!tmpl) return NULL;
 
@@ -289,11 +287,15 @@ static char *file_temp_template(const char *dir, const char *base)
     memcpy(p, dir, dlen);
     p += dlen;
     if (need_sep) *p++ = '/';
-    *p++ = '.';
-    memcpy(p, base, blen);
-    p += blen;
-    memcpy(p, suffix, sizeof(suffix));
+    memcpy(p, name, sizeof(name));
     return tmpl;
+}
+
+static mode_t file_default_create_mode(void)
+{
+    mode_t mask = umask(0);
+    (void)umask(mask);
+    return (mode_t)(0666 & ~mask);
 }
 
 static int file_sync_parent_dir(const char *dir)
@@ -348,27 +350,50 @@ static int file_write_to_path(const char *path)
      *   4. fsync the parent directory so the rename is durable.
      */
     struct stat st;
-    mode_t mode = 0644;
-    if (stat(path, &st) == 0) {
+    struct stat lst;
+    char *resolved_path = NULL;
+    const char *write_path = path;
+    mode_t mode = file_default_create_mode();
+
+    errno = 0;
+    int lstat_result = lstat(path, &lst);
+    if (lstat_result == 0 && S_ISLNK(lst.st_mode)) {
+        resolved_path = realpath(path, NULL);
+        if (!resolved_path) {
+            editor_set_status_message("Save failed: %s", strerror(errno));
+            free(buf);
+            return 0;
+        }
+        write_path = resolved_path;
+    } else if (lstat_result == -1 && errno != ENOENT) {
+        editor_set_status_message("Save failed: %s", strerror(errno));
+        free(resolved_path);
+        free(buf);
+        return 0;
+    }
+
+    if (stat(write_path, &st) == 0) {
         if (!S_ISREG(st.st_mode)) {
             editor_set_status_message("Save failed: not a regular file.");
+            free(resolved_path);
             free(buf);
             return 0;
         }
         mode = st.st_mode & 0777;
     } else if (errno != ENOENT) {
         editor_set_status_message("Save failed: %s", strerror(errno));
+        free(resolved_path);
         free(buf);
         return 0;
     }
 
-    char *dir = file_dirname_dup(path);
-    const char *base = file_basename_ptr(path);
-    char *tmp_path = (dir && base) ? file_temp_template(dir, base) : NULL;
+    char *dir = file_dirname_dup(write_path);
+    char *tmp_path = dir ? file_temp_template(dir) : NULL;
     if (!dir || !tmp_path) {
         editor_set_status_message("Save failed: out of memory.");
         free(dir);
         free(tmp_path);
+        free(resolved_path);
         free(buf);
         return 0;
     }
@@ -378,6 +403,7 @@ static int file_write_to_path(const char *path)
         editor_set_status_message("Save failed: %s", strerror(errno));
         free(dir);
         free(tmp_path);
+        free(resolved_path);
         free(buf);
         return 0;
     }
@@ -389,6 +415,7 @@ static int file_write_to_path(const char *path)
         editor_set_status_message("Save failed: %s", strerror(saved));
         free(dir);
         free(tmp_path);
+        free(resolved_path);
         free(buf);
         return 0;
     }
@@ -404,6 +431,7 @@ static int file_write_to_path(const char *path)
             unlink(tmp_path);
             free(dir);
             free(tmp_path);
+            free(resolved_path);
             free(buf);
             return 0;
         }
@@ -413,6 +441,7 @@ static int file_write_to_path(const char *path)
             unlink(tmp_path);
             free(dir);
             free(tmp_path);
+            free(resolved_path);
             free(buf);
             return 0;
         }
@@ -435,16 +464,18 @@ static int file_write_to_path(const char *path)
         unlink(tmp_path);
         free(dir);
         free(tmp_path);
+        free(resolved_path);
         free(buf);
         editor_set_status_message("Save failed: %s", strerror(saved));
         return 0;
     }
 
-    if (rename(tmp_path, path) == -1) {
+    if (rename(tmp_path, write_path) == -1) {
         int saved = errno;
         unlink(tmp_path);
         free(dir);
         free(tmp_path);
+        free(resolved_path);
         free(buf);
         editor_set_status_message("Save failed: %s", strerror(saved));
         return 0;
@@ -453,18 +484,23 @@ static int file_write_to_path(const char *path)
     int dirsync_ok = file_sync_parent_dir(dir);
     int dirsync_errno = errno;
 
+    if (!dirsync_ok && dirsync_errno != EINVAL && dirsync_errno != ENOTSUP) {
+        free(dir);
+        free(tmp_path);
+        free(resolved_path);
+        free(buf);
+        editor_set_status_message("Save failed after rename: %s",
+                                  strerror(dirsync_errno));
+        return 0;
+    }
+
     free(dir);
     free(tmp_path);
+    free(resolved_path);
     free(buf);
 
     E.dirty = 0;
-    if (dirsync_ok) {
-        editor_set_status_message("%d bytes written to %s", len, path);
-    } else {
-        editor_set_status_message(
-            "%d bytes written to %s (directory sync warning: %s)",
-            len, path, strerror(dirsync_errno));
-    }
+    editor_set_status_message("%d bytes written to %s", len, path);
     return 1;
 }
 
@@ -493,16 +529,17 @@ int file_save_as(const char *path)
         return 0;
     }
 
-    if (!file_write_to_path(path)) {
+    char *copy = strdup(path);
+    if (!copy) {
+        editor_set_status_message("Save failed: out of memory.");
         return 0;
     }
 
-    char *copy = strdup(path);
-    if (!copy) {
-        editor_set_status_message(
-            "Saved to %s (name not updated: OOM).", path);
-        return 1;
+    if (!file_write_to_path(path)) {
+        free(copy);
+        return 0;
     }
+
     free(E.filename);
     E.filename = copy;
     output_select_syntax_highlight();

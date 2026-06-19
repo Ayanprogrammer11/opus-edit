@@ -254,6 +254,16 @@ def scenario_basic_edit_save_quit(binary: Path, root: Path) -> None:
     assert_file(target, b"hello\nworld\n")
 
 
+def scenario_fast_escape_preserves_following_keys(binary: Path, root: Path) -> None:
+    target = root / "fast-escape.txt"
+    with EditorSession(binary, target, "fast escape preserves keys") as ed:
+        ed.send(b"abc")
+        ed.send(ESC + b"iX", pause=0.2)
+        ed.send(CTRL_S + CTRL_Q)
+        ed.wait_exit()
+    assert_file(target, b"abcX\n")
+
+
 def scenario_undo_redo(binary: Path, root: Path) -> None:
     target = root / "undo-redo.txt"
     with EditorSession(binary, target, "undo redo") as ed:
@@ -369,6 +379,17 @@ def scenario_unnamed_save_as_prompt(binary: Path, root: Path) -> None:
         ed.send(b"draft")
         ed.send(CTRL_S)
         ed.send(str(target) + "\r")
+        ed.send(CTRL_Q)
+        ed.wait_exit()
+    assert_file(target, b"draft\n")
+
+
+def scenario_unicode_save_as_prompt(binary: Path, root: Path) -> None:
+    target = root / "unicode-cafe-\u00e9.txt"
+    with EditorSession(binary, None, "unicode save-as prompt") as ed:
+        ed.send(b"draft")
+        ed.send(CTRL_S)
+        ed.send(str(target).encode("utf-8") + ENTER)
         ed.send(CTRL_Q)
         ed.wait_exit()
     assert_file(target, b"draft\n")
@@ -820,6 +841,7 @@ def scenario_mouse_scroll_is_non_destructive(binary: Path, root: Path) -> None:
 
 SCENARIOS = [
     scenario_basic_edit_save_quit,
+    scenario_fast_escape_preserves_following_keys,
     scenario_undo_redo,
     scenario_newline_undo_redo,
     scenario_command_trim_duplicate,
@@ -830,6 +852,7 @@ SCENARIOS = [
     scenario_multi_cursor_insert,
     scenario_unsaved_close_confirmation,
     scenario_unnamed_save_as_prompt,
+    scenario_unicode_save_as_prompt,
     scenario_save_as_command_wq,
     scenario_command_edit_force_open,
     scenario_command_quit_refuses_dirty,
