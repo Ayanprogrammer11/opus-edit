@@ -17,6 +17,10 @@
 
 int buffer_cx_to_rx(const erow *row, int cx)
 {
+    if (!row) return 0;
+    if (cx < 0) cx = 0;
+    if (cx > row->size) cx = row->size;
+
     int rx = 0;
     for (int j = 0; j < cx; j++) {
         if (row->chars[j] == '\t')
@@ -28,6 +32,9 @@ int buffer_cx_to_rx(const erow *row, int cx)
 
 int buffer_rx_to_cx(const erow *row, int rx)
 {
+    if (!row) return 0;
+    if (rx < 0) return 0;
+
     int cur_rx = 0;
     int cx;
     for (cx = 0; cx < row->size; cx++) {
@@ -59,6 +66,7 @@ void buffer_update_row(erow *row)
     }
 
     free(row->render);
+    row->render = NULL;
     size_t render_len = (size_t)row->size + tabs * (size_t)(OPUSEDIT_TAB_STOP - 1);
     if (render_len > (size_t)INT_MAX - 1) {
         row->render = NULL;
@@ -67,11 +75,13 @@ void buffer_update_row(erow *row)
         return;
     }
 
-    row->render = malloc(render_len + 1);
-    if (!row->render) {
+    char *render = malloc(render_len + 1);
+    if (!render) {
         row->rsize = 0;
+        output_update_syntax(row);
         return;
     }
+    row->render = render;
 
     int idx = 0;
     for (int j = 0; j < row->size; j++) {
@@ -91,24 +101,30 @@ void buffer_update_row(erow *row)
 
 /* ── Row insertion ────────────────────────────────────────── */
 
-void buffer_insert_row(int at, const char *s, size_t len)
+int buffer_insert_row(int at, const char *s, size_t len)
 {
-    if (at < 0 || at > E.numrows) return;
+    if (at < 0 || at > E.numrows) return 0;
+    if (E.numrows == INT_MAX) return 0;
+    if (len > 0 && !s) return 0;
     if (len > (size_t)OPUSEDIT_MAX_ROW_SIZE) {
         editor_set_status_message("Line too long to insert.");
-        return;
+        return 0;
     }
-    if (len > SIZE_MAX - 1) return;
+    if (len > SIZE_MAX - 1) return 0;
 
     char *chars = malloc(len + 1);
-    if (!chars) return;
-    memcpy(chars, s, len);
+    if (!chars) return 0;
+    if (len > 0) memcpy(chars, s, len);
     chars[len] = '\0';
 
+    if ((size_t)(E.numrows + 1) > SIZE_MAX / sizeof(erow)) {
+        free(chars);
+        return 0;
+    }
     erow *newrows = realloc(E.row, sizeof(erow) * (size_t)(E.numrows + 1));
     if (!newrows) {
         free(chars);
-        return;
+        return 0;
     }
     E.row = newrows;
 
@@ -134,6 +150,7 @@ void buffer_insert_row(int at, const char *s, size_t len)
     E.numrows++;
     E.dirty++;
     git_mark_dirty();
+    return 1;
 }
 
 /* ── Row deletion ─────────────────────────────────────────── */
@@ -167,17 +184,18 @@ void buffer_delete_row(int at)
 
 /* ── Row-level character operations ───────────────────────── */
 
-void buffer_row_insert_char(erow *row, int at, int c)
+int buffer_row_insert_char(erow *row, int at, int c)
 {
-    if (!row) return;
+    if (!row) return 0;
+    if (c < 0 || c > UCHAR_MAX) return 0;
     if (row->size < 0 || row->size >= OPUSEDIT_MAX_ROW_SIZE) {
         editor_set_status_message("Line too long to insert.");
-        return;
+        return 0;
     }
     if (at < 0 || at > row->size) at = row->size;
 
     char *tmp = realloc(row->chars, (size_t)(row->size + 2));
-    if (!tmp) return;
+    if (!tmp) return 0;
     row->chars = tmp;
 
     memmove(&row->chars[at + 1], &row->chars[at],
@@ -188,12 +206,13 @@ void buffer_row_insert_char(erow *row, int at, int c)
     buffer_update_row(row);
     E.dirty++;
     git_mark_dirty();
+    return 1;
 }
 
-void buffer_row_delete_char(erow *row, int at)
+int buffer_row_delete_char(erow *row, int at)
 {
-    if (!row) return;
-    if (at < 0 || at >= row->size) return;
+    if (!row) return 0;
+    if (at < 0 || at >= row->size) return 0;
 
     memmove(&row->chars[at], &row->chars[at + 1],
             (size_t)(row->size - at));
@@ -202,6 +221,7 @@ void buffer_row_delete_char(erow *row, int at)
     buffer_update_row(row);
     E.dirty++;
     git_mark_dirty();
+    return 1;
 }
 
 int buffer_row_append_string(erow *row, const char *s, size_t len)
@@ -235,11 +255,16 @@ int buffer_row_append_string(erow *row, const char *s, size_t len)
 void buffer_insert_char(int c)
 {
     if (E.cy == E.numrows) {
-        buffer_insert_row(E.numrows, "", 0);
+        if (!buffer_insert_row(E.numrows, "", 0))
+            return;
     }
-    undo_push(UNDO_INSERT_CHAR, E.cy, E.cx, c);
-    buffer_row_insert_char(&E.row[E.cy], E.cx, c);
-    E.cx++;
+    if (E.cy < 0 || E.cy >= E.numrows) return;
+    if (E.cx < 0) E.cx = 0;
+    if (E.cx > E.row[E.cy].size) E.cx = E.row[E.cy].size;
+    if (buffer_row_insert_char(&E.row[E.cy], E.cx, c)) {
+        undo_push(UNDO_INSERT_CHAR, E.cy, E.cx, c);
+        E.cx++;
+    }
 }
 
 void buffer_delete_char(void)
@@ -250,9 +275,10 @@ void buffer_delete_char(void)
     erow *row = &E.row[E.cy];
     if (E.cx > 0) {
         int deleted = row->chars[E.cx - 1];
-        undo_push(UNDO_DELETE_CHAR, E.cy, E.cx - 1, deleted);
-        buffer_row_delete_char(row, E.cx - 1);
-        E.cx--;
+        if (buffer_row_delete_char(row, E.cx - 1)) {
+            undo_push(UNDO_DELETE_CHAR, E.cy, E.cx - 1, deleted);
+            E.cx--;
+        }
     } else {
         /* Merge with previous line */
         int merge_col = E.row[E.cy - 1].size;
@@ -260,8 +286,8 @@ void buffer_delete_char(void)
                                       row->chars, (size_t)row->size)) {
             return;
         }
-        undo_push(UNDO_DELETE_NEWLINE, E.cy - 1, merge_col, 0);
         buffer_delete_row(E.cy);
+        undo_push(UNDO_DELETE_NEWLINE, E.cy - 1, merge_col, 0);
         E.cy--;
         E.cx = merge_col;
     }
@@ -269,6 +295,15 @@ void buffer_delete_char(void)
 
 int buffer_insert_newline(void)
 {
+    if (E.cy < 0) E.cy = 0;
+    if (E.cy > E.numrows) E.cy = E.numrows;
+    if (E.cy < E.numrows) {
+        if (E.cx < 0) E.cx = 0;
+        if (E.cx > E.row[E.cy].size) E.cx = E.row[E.cy].size;
+    } else {
+        E.cx = 0;
+    }
+
     char *indent = NULL;
     int indent_len = 0;
     int extra_spaces = 0;
@@ -305,20 +340,26 @@ int buffer_insert_newline(void)
         }
     }
 
-    undo_push(UNDO_INSERT_NEWLINE, E.cy, E.cx, 0);
     if (E.cx == 0) {
-        buffer_insert_row(E.cy, "", 0);
+        if (!buffer_insert_row(E.cy, "", 0)) {
+            free(indent);
+            return -1;
+        }
     } else {
         erow *row = &E.row[E.cy];
-        buffer_insert_row(E.cy + 1,
-                          &row->chars[E.cx],
-                          (size_t)(row->size - E.cx));
+        if (!buffer_insert_row(E.cy + 1,
+                               &row->chars[E.cx],
+                               (size_t)(row->size - E.cx))) {
+            free(indent);
+            return -1;
+        }
         /* After insert_row, E.row may have been realloc'd */
         row = &E.row[E.cy];
         row->size  = E.cx;
         row->chars[row->size] = '\0';
         buffer_update_row(row);
     }
+    undo_push(UNDO_INSERT_NEWLINE, E.cy, E.cx, 0);
     E.cy++;
     E.cx = 0;
 
@@ -347,7 +388,11 @@ void buffer_duplicate_line(void)
         E.auto_indent = 0;
         E.cy = 0;
         E.cx = 0;
-        buffer_insert_newline();
+        if (buffer_insert_newline() < 0) {
+            E.auto_indent = saved_auto;
+            editor_set_status_message("Duplicate failed: out of memory.");
+            return;
+        }
         E.auto_indent = saved_auto;
         E.cy = 0;
         E.cx = 0;
@@ -374,7 +419,12 @@ void buffer_duplicate_line(void)
     E.cy = row_idx;
     E.cx = row->size;
     E.auto_indent = 0;
-    buffer_insert_newline();
+    if (buffer_insert_newline() < 0) {
+        E.auto_indent = saved_auto;
+        free(copy);
+        editor_set_status_message("Duplicate failed: out of memory.");
+        return;
+    }
     E.auto_indent = saved_auto;
 
     for (int i = 0; i < len; i++) {
@@ -405,9 +455,12 @@ int buffer_trim_trailing_whitespace(void)
             if (ch != ' ' && ch != '\t') break;
             E.cy = row_idx;
             E.cx = col + 1;
-            undo_push(UNDO_DELETE_CHAR, row_idx, col, ch);
-            buffer_row_delete_char(row, col);
-            removed++;
+            if (buffer_row_delete_char(row, col)) {
+                undo_push(UNDO_DELETE_CHAR, row_idx, col, ch);
+                removed++;
+            } else {
+                break;
+            }
         }
     }
 

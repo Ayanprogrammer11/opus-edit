@@ -133,19 +133,19 @@ static int apply_inverse(const undo_op *op)
     switch (op->type) {
         case UNDO_INSERT_CHAR:
             /* A char was inserted → delete it */
-            if (op->row < E.numrows)
-                buffer_row_delete_char(&E.row[op->row], op->col);
-            return 1;
+            if (op->row >= 0 && op->row < E.numrows)
+                return buffer_row_delete_char(&E.row[op->row], op->col);
+            return 0;
 
         case UNDO_DELETE_CHAR:
             /* A char was deleted → re-insert it */
-            if (op->row < E.numrows)
-                buffer_row_insert_char(&E.row[op->row], op->col, op->c);
-            return 1;
+            if (op->row >= 0 && op->row < E.numrows)
+                return buffer_row_insert_char(&E.row[op->row], op->col, op->c);
+            return 0;
 
         case UNDO_INSERT_NEWLINE:
             /* A newline was inserted (row was split) → merge them back */
-            if (op->row + 1 < E.numrows) {
+            if (op->row >= 0 && op->row + 1 < E.numrows) {
                 if (!buffer_row_append_string(
                         &E.row[op->row],
                         E.row[op->row + 1].chars,
@@ -153,17 +153,22 @@ static int apply_inverse(const undo_op *op)
                     return 0;
                 }
                 buffer_delete_row(op->row + 1);
+            } else if (op->row >= 0 && op->row < E.numrows
+                       && op->col == 0 && E.row[op->row].size == 0) {
+                buffer_delete_row(op->row);
             }
             return 1;
 
         case UNDO_DELETE_NEWLINE:
             /* A newline was deleted (rows were merged) → split again */
-            if (op->row < E.numrows) {
+            if (op->row >= 0 && op->row < E.numrows) {
                 erow *row = &E.row[op->row];
                 if (op->col <= row->size) {
-                    buffer_insert_row(op->row + 1,
-                                      &row->chars[op->col],
-                                      (size_t)(row->size - op->col));
+                    if (!buffer_insert_row(op->row + 1,
+                                           &row->chars[op->col],
+                                           (size_t)(row->size - op->col))) {
+                        return 0;
+                    }
                     /* row pointer may be stale after insert_row */
                     row = &E.row[op->row];
                     row->size = op->col;
@@ -181,32 +186,37 @@ static int apply_forward(const undo_op *op)
 {
     switch (op->type) {
         case UNDO_INSERT_CHAR:
-            if (op->row < E.numrows)
-                buffer_row_insert_char(&E.row[op->row], op->col, op->c);
-            return 1;
+            if (op->row >= 0 && op->row < E.numrows)
+                return buffer_row_insert_char(&E.row[op->row], op->col, op->c);
+            return 0;
 
         case UNDO_DELETE_CHAR:
-            if (op->row < E.numrows)
-                buffer_row_delete_char(&E.row[op->row], op->col);
-            return 1;
+            if (op->row >= 0 && op->row < E.numrows)
+                return buffer_row_delete_char(&E.row[op->row], op->col);
+            return 0;
 
         case UNDO_INSERT_NEWLINE:
-            if (op->row < E.numrows) {
+            if (op->row >= 0 && op->row < E.numrows) {
                 erow *row = &E.row[op->row];
                 if (op->col <= row->size) {
-                    buffer_insert_row(op->row + 1,
-                                      &row->chars[op->col],
-                                      (size_t)(row->size - op->col));
+                    if (!buffer_insert_row(op->row + 1,
+                                           &row->chars[op->col],
+                                           (size_t)(row->size - op->col))) {
+                        return 0;
+                    }
                     row = &E.row[op->row];
                     row->size = op->col;
                     row->chars[row->size] = '\0';
                     buffer_update_row(row);
                 }
+            } else if (op->row == E.numrows && op->col == 0) {
+                if (!buffer_insert_row(op->row, "", 0))
+                    return 0;
             }
             return 1;
 
         case UNDO_DELETE_NEWLINE:
-            if (op->row + 1 < E.numrows) {
+            if (op->row >= 0 && op->row + 1 < E.numrows) {
                 if (!buffer_row_append_string(
                         &E.row[op->row],
                         E.row[op->row + 1].chars,
@@ -218,21 +228,6 @@ static int apply_forward(const undo_op *op)
             return 1;
     }
     return 1;
-}
-
-/*
- * Compute the inverse operation type (for pushing onto the
- * opposite stack during undo/redo).
- */
-static enum undo_op_type inverse_type(enum undo_op_type t)
-{
-    switch (t) {
-        case UNDO_INSERT_CHAR:    return UNDO_DELETE_CHAR;
-        case UNDO_DELETE_CHAR:    return UNDO_INSERT_CHAR;
-        case UNDO_INSERT_NEWLINE: return UNDO_DELETE_NEWLINE;
-        case UNDO_DELETE_NEWLINE: return UNDO_INSERT_NEWLINE;
-    }
-    return t; /* unreachable */
 }
 
 /* ── Undo ─────────────────────────────────────────────────── */
@@ -269,11 +264,8 @@ void undo_perform_undo(void)
         restore_cy = op.cursor_y;
         did_undo = 1;
 
-        /* Push inverse onto redo stack with a fresh group */
-        undo_op redo_op = op;
-        redo_op.type = inverse_type(op.type);
-        /* Keep same group_id so redo also groups correctly */
-        stack_push_raw(&E.redo, &redo_op);
+        /* Keep the original operation so redo can replay it forward. */
+        stack_push_raw(&E.redo, &op);
     }
 
     /* Restore cursor to where it was before the group was applied */
@@ -341,12 +333,8 @@ void undo_perform_redo(void)
                 break;
         }
 
-        /* Push inverse onto undo stack (so we can undo again) */
-        undo_op undo_op_inv = op;
-        undo_op_inv.type     = inverse_type(op.type);
-        undo_op_inv.cursor_x = op.cursor_x;
-        undo_op_inv.cursor_y = op.cursor_y;
-        stack_push_raw(&E.undo, &undo_op_inv);
+        /* Restore the original operation to the undo stack. */
+        stack_push_raw(&E.undo, &op);
         did_redo = 1;
     }
 

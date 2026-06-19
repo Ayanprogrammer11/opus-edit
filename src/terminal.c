@@ -6,6 +6,7 @@
 #include "editor.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,7 +24,10 @@ int terminal_write_all(const char *buf, size_t len)
 {
     size_t off = 0;
     while (off < len) {
-        ssize_t n = write(STDOUT_FILENO, buf + off, len - off);
+        size_t chunk = len - off;
+        if (chunk > (size_t)SSIZE_MAX)
+            chunk = (size_t)SSIZE_MAX;
+        ssize_t n = write(STDOUT_FILENO, buf + off, chunk);
         if (n < 0) {
             if (errno == EINTR) continue;
             return -1;
@@ -115,7 +119,7 @@ static int terminal_get_cursor_position(int *rows, int *cols)
     unsigned int i = 0;
 
     /* Ask the terminal for the current cursor position */
-    if (write(STDOUT_FILENO, "\x1b[6n", 4) != 4) return -1;
+    if (terminal_write_all("\x1b[6n", 4) == -1) return -1;
 
     while (i < sizeof(buf) - 1) {
         if (read(STDIN_FILENO, &buf[i], 1) != 1) break;
@@ -124,7 +128,7 @@ static int terminal_get_cursor_position(int *rows, int *cols)
     }
     buf[i] = '\0';
 
-    if (buf[0] != '\x1b' || buf[1] != '[') return -1;
+    if (i < 2 || buf[0] != '\x1b' || buf[1] != '[') return -1;
 
     const char *p = &buf[2];
     char *end = NULL;
@@ -154,7 +158,7 @@ int terminal_get_window_size(int *rows, int *cols)
          * Fallback: move the cursor to the bottom-right corner,
          * then query position.
          */
-        if (write(STDOUT_FILENO, "\x1b[999C\x1b[999B", 12) != 12)
+        if (terminal_write_all("\x1b[999C\x1b[999B", 12) == -1)
             return -1;
         return terminal_get_cursor_position(rows, cols);
     }

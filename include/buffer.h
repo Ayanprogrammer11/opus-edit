@@ -21,9 +21,9 @@ void buffer_update_row(erow *row);
 
 /*
  * Insert a new row at position `at` with content `s` of length `len`.
- * Adjusts indices of all subsequent rows.
+ * Adjusts indices of all subsequent rows. Returns 1 on success, 0 on failure.
  */
-void buffer_insert_row(int at, const char *s, size_t len);
+int buffer_insert_row(int at, const char *s, size_t len);
 
 /* Free all heap allocations inside a row (does not free the struct). */
 void buffer_free_row(erow *row);
@@ -31,11 +31,13 @@ void buffer_free_row(erow *row);
 /* Delete the row at position `at`, shifting subsequent rows up. */
 void buffer_delete_row(int at);
 
-/* Insert character `c` into `row` at column `at`. */
-void buffer_row_insert_char(erow *row, int at, int c);
+/* Insert character `c` into `row` at column `at`.
+ * Returns 1 on success, 0 on failure. */
+int buffer_row_insert_char(erow *row, int at, int c);
 
-/* Delete the character at column `at` in `row`. */
-void buffer_row_delete_char(erow *row, int at);
+/* Delete the character at column `at` in `row`.
+ * Returns 1 on success, 0 if nothing was deleted. */
+int buffer_row_delete_char(erow *row, int at);
 
 /* Append string `s` (length `len`) to the end of `row`.
  * Returns 1 on success, 0 on failure. */
@@ -50,7 +52,7 @@ void buffer_insert_char(int c);
 void buffer_delete_char(void);
 
 /* Insert a newline at the cursor, splitting the current row.
- * Returns the count of auto-indent characters inserted. */
+ * Returns the count of auto-indent characters inserted, or -1 on failure. */
 int  buffer_insert_newline(void);
 
 /* Duplicate the current line, placing the cursor on the copy. */

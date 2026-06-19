@@ -3,7 +3,7 @@
  *
  * Initialises the terminal, editor state, and enters the main loop.
  *
- * Usage:  opusedit [filename]
+ * Usage:  opusedit [file ...]
  *
  * Key bindings:
  *   Ctrl-Q        Quit (press twice if unsaved changes exist)

@@ -11,7 +11,9 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -48,24 +50,172 @@ static void file_reset_buffer_state(void)
     E.undo_recording = 1;
 }
 
-void file_open(const char *filename)
+static void file_free_loaded_rows(erow *rows, int count)
+{
+    if (!rows) return;
+    for (int i = 0; i < count; i++)
+        buffer_free_row(&rows[i]);
+    free(rows);
+}
+
+static int file_make_loaded_row(erow *row, int idx, const char *s, size_t len)
+{
+    if (!row) return 0;
+    if (len > 0 && !s) return 0;
+    if (len > (size_t)OPUSEDIT_MAX_ROW_SIZE) return 0;
+
+    memset(row, 0, sizeof(*row));
+    row->idx = idx;
+    row->size = (int)len;
+
+    row->chars = malloc(len + 1);
+    if (!row->chars) return 0;
+    if (len > 0) memcpy(row->chars, s, len);
+    row->chars[len] = '\0';
+
+    size_t tabs = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (s[i] == '\t') tabs++;
+    }
+    size_t render_len = len + tabs * (size_t)(OPUSEDIT_TAB_STOP - 1);
+    if (render_len > (size_t)INT_MAX - 1) {
+        buffer_free_row(row);
+        return 0;
+    }
+
+    row->render = malloc(render_len + 1);
+    if (!row->render) {
+        buffer_free_row(row);
+        return 0;
+    }
+
+    int ridx = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (s[i] == '\t') {
+            row->render[ridx++] = ' ';
+            while (ridx % OPUSEDIT_TAB_STOP != 0)
+                row->render[ridx++] = ' ';
+        } else {
+            row->render[ridx++] = s[i];
+        }
+    }
+    row->render[ridx] = '\0';
+    row->rsize = ridx;
+    row->hl = NULL;
+    row->hl_open_comment = 0;
+    row->hl_open_string = 0;
+    return 1;
+}
+
+static int file_append_loaded_row(erow **rows, int *count,
+                                  const char *s, size_t len)
+{
+    if (!rows || !count) return 0;
+    if (*count == INT_MAX) return 0;
+
+    erow row;
+    if (!file_make_loaded_row(&row, *count, s, len))
+        return 0;
+
+    if ((size_t)(*count + 1) > SIZE_MAX / sizeof(erow)) {
+        buffer_free_row(&row);
+        return 0;
+    }
+    erow *tmp = realloc(*rows, (size_t)(*count + 1) * sizeof(erow));
+    if (!tmp) {
+        buffer_free_row(&row);
+        return 0;
+    }
+
+    *rows = tmp;
+    (*rows)[*count] = row;
+    (*count)++;
+    return 1;
+}
+
+int file_open(const char *filename)
 {
     if (!filename || !*filename) {
         editor_set_status_message("Open failed: no filename.");
-        return;
+        return 0;
+    }
+
+    struct stat st;
+    int exists = 0;
+    if (stat(filename, &st) == 0) {
+        exists = 1;
+        if (!S_ISREG(st.st_mode)) {
+            editor_set_status_message("Open failed: not a regular file.");
+            return 0;
+        }
+    } else if (errno != ENOENT) {
+        editor_set_status_message("Open failed: %s", strerror(errno));
+        return 0;
     }
 
     FILE *fp = fopen(filename, "r");
-    if (!fp && errno != ENOENT) {
+    if (!fp && exists) {
         editor_set_status_message("Open failed: %s", strerror(errno));
-        return;
+        return 0;
     }
 
     char *copy = strdup(filename);
     if (!copy) {
         if (fp) fclose(fp);
         editor_set_status_message("Open failed: out of memory.");
-        return;
+        return 0;
+    }
+
+    erow *loaded_rows = NULL;
+    int loaded_count = 0;
+    char  *line    = NULL;
+    size_t linecap = 0;
+    ssize_t linelen;
+
+    if (fp) {
+        while ((linelen = getline(&line, &linecap, fp)) != -1) {
+            /* Strip trailing newline / carriage-return */
+            while (linelen > 0 &&
+                   (line[linelen - 1] == '\n' || line[linelen - 1] == '\r'))
+                linelen--;
+
+            if (linelen > (ssize_t)OPUSEDIT_MAX_ROW_SIZE) {
+                editor_set_status_message("Open failed: line too long.");
+                free(line);
+                fclose(fp);
+                free(copy);
+                file_free_loaded_rows(loaded_rows, loaded_count);
+                return 0;
+            }
+
+            if (!file_append_loaded_row(&loaded_rows, &loaded_count,
+                                        line, (size_t)linelen)) {
+                editor_set_status_message("Open failed: out of memory.");
+                free(line);
+                fclose(fp);
+                free(copy);
+                file_free_loaded_rows(loaded_rows, loaded_count);
+                return 0;
+            }
+        }
+
+        if (ferror(fp)) {
+            editor_set_status_message("Open failed: %s", strerror(errno));
+            free(line);
+            fclose(fp);
+            free(copy);
+            file_free_loaded_rows(loaded_rows, loaded_count);
+            return 0;
+        }
+
+        if (fclose(fp) == EOF) {
+            editor_set_status_message("Open failed: %s", strerror(errno));
+            free(line);
+            free(copy);
+            file_free_loaded_rows(loaded_rows, loaded_count);
+            return 0;
+        }
+        free(line);
     }
 
     file_reset_buffer_state();
@@ -73,51 +223,99 @@ void file_open(const char *filename)
     editor_clear_mcursors();
     free(E.filename);
     E.filename = copy;
+    E.row = loaded_rows;
+    E.numrows = loaded_count;
+    E.dirty = 0;
 
     output_select_syntax_highlight();
     git_on_file_change();
-
-    if (!fp) {
-        /* New file – that's fine, no rows to read */
-        return;
-    }
-
-    char  *line    = NULL;
-    size_t linecap = 0;
-    ssize_t linelen;
-
-    while ((linelen = getline(&line, &linecap, fp)) != -1) {
-        /* Strip trailing newline / carriage-return */
-        while (linelen > 0 &&
-               (line[linelen - 1] == '\n' || line[linelen - 1] == '\r'))
-            linelen--;
-
-        if (linelen > (ssize_t)OPUSEDIT_MAX_ROW_SIZE) {
-            editor_set_status_message("Open failed: line too long.");
-            free(line);
-            fclose(fp);
-            file_reset_buffer_state();
-            return;
-        }
-
-        buffer_insert_row(E.numrows, line, (size_t)linelen);
-    }
-
-    if (ferror(fp)) {
-        editor_set_status_message("Open failed: %s", strerror(errno));
-        free(line);
-        fclose(fp);
-        file_reset_buffer_state();
-        return;
-    }
-
-    free(line);
-    fclose(fp);
-    E.dirty = 0;
-    git_mark_dirty();
+    if (exists)
+        git_mark_dirty();
+    return 1;
 }
 
 /* ── Save file ────────────────────────────────────────────── */
+
+static int file_sync_fd(int fd)
+{
+#ifdef __linux__
+    return fdatasync(fd);
+#else
+    return fsync(fd);
+#endif
+}
+
+static char *file_dirname_dup(const char *path)
+{
+    const char *slash = strrchr(path, '/');
+    if (!slash) return strdup(".");
+    if (slash == path) return strdup("/");
+
+    size_t len = (size_t)(slash - path);
+    char *dir = malloc(len + 1);
+    if (!dir) return NULL;
+    memcpy(dir, path, len);
+    dir[len] = '\0';
+    return dir;
+}
+
+static const char *file_basename_ptr(const char *path)
+{
+    const char *slash = strrchr(path, '/');
+    return slash ? slash + 1 : path;
+}
+
+static char *file_temp_template(const char *dir, const char *base)
+{
+    static const char suffix[] = ".tmp.XXXXXX";
+    size_t dlen = strlen(dir);
+    size_t blen = strlen(base);
+    int need_sep = !(dlen == 1 && dir[0] == '/');
+    size_t sep_len = need_sep ? 1U : 0U;
+
+    if (blen == 0) return NULL;
+    if (dlen > SIZE_MAX - sep_len
+        || dlen + sep_len > SIZE_MAX - 1U
+        || dlen + sep_len + 1U > SIZE_MAX - blen
+        || dlen + sep_len + 1U + blen > SIZE_MAX - sizeof(suffix)) {
+        return NULL;
+    }
+
+    size_t len = dlen + sep_len + 1U + blen + sizeof(suffix);
+    char *tmpl = malloc(len);
+    if (!tmpl) return NULL;
+
+    char *p = tmpl;
+    memcpy(p, dir, dlen);
+    p += dlen;
+    if (need_sep) *p++ = '/';
+    *p++ = '.';
+    memcpy(p, base, blen);
+    p += blen;
+    memcpy(p, suffix, sizeof(suffix));
+    return tmpl;
+}
+
+static int file_sync_parent_dir(const char *dir)
+{
+    int flags = O_RDONLY;
+#ifdef O_DIRECTORY
+    flags |= O_DIRECTORY;
+#endif
+#ifdef O_CLOEXEC
+    flags |= O_CLOEXEC;
+#endif
+    int fd = open(dir, flags);
+    if (fd == -1) return 0;
+    int ok = (fsync(fd) == 0);
+    int saved = errno;
+    if (close(fd) == -1 && ok) {
+        saved = errno;
+        ok = 0;
+    }
+    errno = saved;
+    return ok;
+}
 
 static int file_write_to_path(const char *path)
 {
@@ -125,6 +323,12 @@ static int file_write_to_path(const char *path)
         editor_set_status_message("Save failed: no filename.");
         return 0;
     }
+    size_t path_len = strlen(path);
+    if (path[path_len - 1] == '/') {
+        editor_set_status_message("Save failed: invalid filename.");
+        return 0;
+    }
+
     int len;
     char *buf = buffer_rows_to_string(&len);
     if (!buf) {
@@ -138,22 +342,53 @@ static int file_write_to_path(const char *path)
 
     /*
      * Safe write strategy:
-     *   1. Open / create with truncate.
-     *   2. Write the whole buffer.
-     *   3. fsync to ensure data is on disk.
-     *   4. Close.
-     *
-     * We preserve existing permissions when the file already exists;
-     * for new files we use 0644.
+     *   1. Write to a same-directory temporary file.
+     *   2. fsync the temporary file.
+     *   3. Atomically rename it over the destination.
+     *   4. fsync the parent directory so the rename is durable.
      */
     struct stat st;
     mode_t mode = 0644;
-    if (stat(path, &st) == 0)
+    if (stat(path, &st) == 0) {
+        if (!S_ISREG(st.st_mode)) {
+            editor_set_status_message("Save failed: not a regular file.");
+            free(buf);
+            return 0;
+        }
         mode = st.st_mode & 0777;
+    } else if (errno != ENOENT) {
+        editor_set_status_message("Save failed: %s", strerror(errno));
+        free(buf);
+        return 0;
+    }
 
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, mode);
+    char *dir = file_dirname_dup(path);
+    const char *base = file_basename_ptr(path);
+    char *tmp_path = (dir && base) ? file_temp_template(dir, base) : NULL;
+    if (!dir || !tmp_path) {
+        editor_set_status_message("Save failed: out of memory.");
+        free(dir);
+        free(tmp_path);
+        free(buf);
+        return 0;
+    }
+
+    int fd = mkstemp(tmp_path);
     if (fd == -1) {
         editor_set_status_message("Save failed: %s", strerror(errno));
+        free(dir);
+        free(tmp_path);
+        free(buf);
+        return 0;
+    }
+
+    if (fchmod(fd, mode) == -1) {
+        int saved = errno;
+        close(fd);
+        unlink(tmp_path);
+        editor_set_status_message("Save failed: %s", strerror(saved));
+        free(dir);
+        free(tmp_path);
         free(buf);
         return 0;
     }
@@ -163,62 +398,90 @@ static int file_write_to_path(const char *path)
         ssize_t nw = write(fd, buf + total, (size_t)(len - total));
         if (nw < 0) {
             if (errno == EINTR) continue;
-            editor_set_status_message("Save failed: %s", strerror(errno));
+            int saved = errno;
+            editor_set_status_message("Save failed: %s", strerror(saved));
             close(fd);
+            unlink(tmp_path);
+            free(dir);
+            free(tmp_path);
             free(buf);
             return 0;
         }
         if (nw == 0) {
             editor_set_status_message("Save failed: write returned 0.");
             close(fd);
+            unlink(tmp_path);
+            free(dir);
+            free(tmp_path);
             free(buf);
             return 0;
         }
         total += nw;
     }
 
-    /* Flush to disk */
-#ifdef __linux__
-    if (fdatasync(fd) == -1) {
+    if (file_sync_fd(fd) == -1) {
         int saved = errno;
         close(fd);
+        unlink(tmp_path);
+        free(dir);
+        free(tmp_path);
         free(buf);
         editor_set_status_message("Save failed: %s", strerror(saved));
         return 0;
     }
-#else
-    if (fsync(fd) == -1) {
-        int saved = errno;
-        close(fd);
-        free(buf);
-        editor_set_status_message("Save failed: %s", strerror(saved));
-        return 0;
-    }
-#endif
 
     if (close(fd) == -1) {
         int saved = errno;
+        unlink(tmp_path);
+        free(dir);
+        free(tmp_path);
         free(buf);
         editor_set_status_message("Save failed: %s", strerror(saved));
         return 0;
     }
+
+    if (rename(tmp_path, path) == -1) {
+        int saved = errno;
+        unlink(tmp_path);
+        free(dir);
+        free(tmp_path);
+        free(buf);
+        editor_set_status_message("Save failed: %s", strerror(saved));
+        return 0;
+    }
+
+    int dirsync_ok = file_sync_parent_dir(dir);
+    int dirsync_errno = errno;
+
+    free(dir);
+    free(tmp_path);
     free(buf);
 
     E.dirty = 0;
-    editor_set_status_message("%d bytes written to %s", len, path);
+    if (dirsync_ok) {
+        editor_set_status_message("%d bytes written to %s", len, path);
+    } else {
+        editor_set_status_message(
+            "%d bytes written to %s (directory sync warning: %s)",
+            len, path, strerror(dirsync_errno));
+    }
     return 1;
 }
 
 void file_save(void)
 {
     if (!E.filename) {
-        E.filename = editor_prompt("Save as: %s (ESC to cancel)", NULL);
-        if (!E.filename) {
+        char *filename = editor_prompt("Save as: %s (ESC to cancel)", NULL);
+        if (!filename) {
             editor_set_status_message("Save aborted.");
             return;
         }
-        output_select_syntax_highlight();
-        git_on_file_change();
+        if (!file_save_as(filename)) {
+            free(filename);
+            return;
+        }
+        free(filename);
+        return;
     }
     file_write_to_path(E.filename);
 }

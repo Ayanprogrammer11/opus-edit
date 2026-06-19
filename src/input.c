@@ -438,6 +438,7 @@ static void mcursors_add_vertical(int delta)
     cursor_pos *list = mcursors_collect(&total);
     if (!list) return;
     for (int i = 0; i < total; i++) {
+        if (list[i].cy < 0 || list[i].cy >= E.numrows) continue;
         int row = list[i].cy + delta;
         if (row < 0 || row >= E.numrows) continue;
         int rx = buffer_cx_to_rx(&E.row[list[i].cy], list[i].cx);
@@ -534,16 +535,18 @@ static void mcursors_apply_insert_char(int c)
         if (row < 0) continue;
         if (row > E.numrows) continue;
         if (row == E.numrows) {
-            buffer_insert_row(E.numrows, "", 0);
+            if (!buffer_insert_row(E.numrows, "", 0))
+                continue;
         }
         if (col < 0) col = 0;
         if (col > E.row[row].size) col = E.row[row].size;
 
         E.cy = row;
         E.cx = col;
-        undo_push(UNDO_INSERT_CHAR, row, col, c);
-        buffer_row_insert_char(&E.row[row], col, c);
-        mcursors_shift_after_insert(list, count, row, col);
+        if (buffer_row_insert_char(&E.row[row], col, c)) {
+            undo_push(UNDO_INSERT_CHAR, row, col, c);
+            mcursors_shift_after_insert(list, count, row, col);
+        }
     }
 
     mcursors_normalize_from_list(list, count);
@@ -568,11 +571,14 @@ static void mcursors_apply_newline(void)
         if (row < 0 || row > E.numrows) continue;
         if (row == E.numrows) col = 0;
         if (col < 0) col = 0;
-        if (col > E.row[row].size) col = E.row[row].size;
+        if (row < E.numrows && col > E.row[row].size)
+            col = E.row[row].size;
 
         E.cy = row;
         E.cx = col;
         int indent = buffer_insert_newline();
+        if (indent < 0)
+            continue;
         mcursors_shift_after_newline(list, count, row, col);
         if (indent > 0)
             mcursors_shift_after_indent(list, count, row + 1, indent);
@@ -606,9 +612,10 @@ static void mcursors_apply_backspace(void)
         if (col > 0) {
             int del_col = col - 1;
             int deleted = E.row[row].chars[del_col];
-            undo_push(UNDO_DELETE_CHAR, row, del_col, deleted);
-            buffer_row_delete_char(&E.row[row], del_col);
-            mcursors_shift_after_delete(list, count, row, del_col);
+            if (buffer_row_delete_char(&E.row[row], del_col)) {
+                undo_push(UNDO_DELETE_CHAR, row, del_col, deleted);
+                mcursors_shift_after_delete(list, count, row, del_col);
+            }
         } else if (row > 0) {
             int merge_col = E.row[row - 1].size;
             buffer_delete_char();
@@ -646,9 +653,10 @@ static void mcursors_apply_delete(void)
         E.cx = col;
         if (col < E.row[row].size) {
             int deleted = E.row[row].chars[col];
-            undo_push(UNDO_DELETE_CHAR, row, col, deleted);
-            buffer_row_delete_char(&E.row[row], col);
-            mcursors_shift_after_delete(list, count, row, col);
+            if (buffer_row_delete_char(&E.row[row], col)) {
+                undo_push(UNDO_DELETE_CHAR, row, col, deleted);
+                mcursors_shift_after_delete(list, count, row, col);
+            }
         } else if (row + 1 < E.numrows) {
             int merge_col = E.row[row].size;
             if (!buffer_row_append_string(&E.row[row],
@@ -656,8 +664,8 @@ static void mcursors_apply_delete(void)
                                           (size_t)E.row[row + 1].size)) {
                 continue;
             }
-            undo_push(UNDO_DELETE_NEWLINE, row, merge_col, 0);
             buffer_delete_row(row + 1);
+            undo_push(UNDO_DELETE_NEWLINE, row, merge_col, 0);
             mcursors_shift_after_merge_next(list, count, row, merge_col);
         }
     }
@@ -667,6 +675,8 @@ static void mcursors_apply_delete(void)
 }
 
 /* ── Selection copy/cut/paste ────────────────────────────── */
+
+static int copy_len_add(size_t *total, size_t add);
 
 static void delete_range(int sy, int sx, int ey, int ex)
 {
@@ -694,39 +704,44 @@ static int selection_or_line_bounds(int *sy, int *sx, int *ey, int *ex,
     return 1;
 }
 
-static void copy_selection_or_line(void)
+static int copy_selection_or_line(void)
 {
     int sy, sx, ey, ex, linewise;
     if (!selection_or_line_bounds(&sy, &sx, &ey, &ex, &linewise)) {
         editor_set_status_message("Nothing to copy.");
-        return;
+        return 0;
     }
 
     size_t total = 0;
     if (linewise) {
         for (int row = sy; row <= ey; row++) {
-            total += (size_t)E.row[row].size + 1;
+            if (!copy_len_add(&total, (size_t)E.row[row].size + 1))
+                goto selection_too_large;
         }
     } else if (sy == ey) {
-        total += (size_t)(ex - sx);
+        if (!copy_len_add(&total, (size_t)(ex - sx)))
+            goto selection_too_large;
     } else {
-        total += (size_t)(E.row[sy].size - sx) + 1;
+        if (!copy_len_add(&total, (size_t)(E.row[sy].size - sx) + 1))
+            goto selection_too_large;
         for (int row = sy + 1; row < ey; row++)
-            total += (size_t)E.row[row].size + 1;
-        total += (size_t)ex;
+            if (!copy_len_add(&total, (size_t)E.row[row].size + 1))
+                goto selection_too_large;
+        if (!copy_len_add(&total, (size_t)ex))
+            goto selection_too_large;
     }
 
     if (total == 0) {
         editor_set_status_message("Nothing to copy.");
         selection_clear();
-        return;
+        return 0;
     }
 
     char *buf = malloc(total);
     if (!buf) {
         editor_set_status_message("Copy failed: out of memory.");
         selection_clear();
-        return;
+        return 0;
     }
 
     char *p = buf;
@@ -758,6 +773,12 @@ static void copy_selection_or_line(void)
     selection_clear();
     editor_set_status_message("Copied %d byte%s.",
                               (int)total, total == 1 ? "" : "s");
+    return 1;
+
+selection_too_large:
+    selection_clear();
+    editor_set_status_message("Selection too large to copy.");
+    return 0;
 }
 
 static void cut_selection_or_line(void)
@@ -768,7 +789,8 @@ static void cut_selection_or_line(void)
         return;
     }
 
-    copy_selection_or_line();
+    if (!copy_selection_or_line())
+        return;
 
     int dsy = sy, dsx = sx, dey = ey, dex = ex;
     if (linewise) {
@@ -866,6 +888,16 @@ static void delete_active_selection_only(void)
     E.cx = sx;
     selection_clear();
 }
+
+static int copy_len_add(size_t *total, size_t add)
+{
+    if (!total) return 0;
+    if (add > (size_t)INT_MAX || *total > (size_t)INT_MAX - add)
+        return 0;
+    *total += add;
+    return 1;
+}
+
 /* ── Command dispatch ─────────────────────────────────────── */
 
 void input_process_keypress(void)
@@ -1043,6 +1075,7 @@ void input_process_keypress(void)
             switch (c) {
                 /* ── Enter ─────────────────────────────────── */
                 case '\r':
+                case '\n':
                     mcursors_apply_newline();
                     break;
 
@@ -1087,7 +1120,8 @@ void input_process_keypress(void)
 
                 /* ── Default: insert character ─────────────── */
                 default:
-                    mcursors_apply_insert_char(c);
+                    if (c == '\t' || (c >= 32 && c <= 255))
+                        mcursors_apply_insert_char(c);
                     break;
             }
             break;

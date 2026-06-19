@@ -609,7 +609,12 @@ void editor_buffer_open_prompt(void)
         return;
     }
     editor_buffer_switch_to(idx);
-    file_open(filename);
+    if (!file_open(filename)) {
+        char status[sizeof(E.statusmsg)];
+        snprintf(status, sizeof(status), "%s", E.statusmsg);
+        editor_buffer_close();
+        editor_set_status_message("%s", status);
+    }
     free(filename);
 }
 

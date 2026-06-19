@@ -10,12 +10,15 @@ LDFLAGS   := -lz
 
 SRCDIR    := src
 INCDIR    := include
+TESTDIR   := tests
 BINDIR    := bin
 OBJDIR    := obj
 
 SRCS      := $(wildcard $(SRCDIR)/*.c)
 OBJS      := $(patsubst $(SRCDIR)/%.c,$(OBJDIR)/%.o,$(SRCS))
 TARGET    := $(BINDIR)/opusedit
+UNIT_TARGET := $(BINDIR)/unit_core_tests
+UNIT_SRCS := $(filter-out $(SRCDIR)/main.c,$(SRCS)) $(TESTDIR)/unit_core.c
 
 # ── Platform detection ──────────────────────────────────────
 UNAME_S := $(shell uname -s)
@@ -27,7 +30,7 @@ ifeq ($(UNAME_S),Linux)
 endif
 
 # ── Default target ──────────────────────────────────────────
-.PHONY: all clean debug release
+.PHONY: all clean debug release test unit-test workflow-test
 
 all: CFLAGS += -O2
 all: $(TARGET)
@@ -39,6 +42,16 @@ debug: $(TARGET)
 release: CFLAGS += -O3 -DNDEBUG
 release: $(TARGET)
 
+test: unit-test workflow-test
+
+unit-test: CFLAGS += -g -O0 -DDEBUG -fsanitize=address,undefined
+unit-test: LDFLAGS += -fsanitize=address,undefined
+unit-test: $(UNIT_TARGET)
+	./$(UNIT_TARGET)
+
+workflow-test: all
+	OPUSEDIT_BIN="$(abspath $(TARGET))" python3 $(TESTDIR)/workflow_tests.py
+
 # ── Build rules ─────────────────────────────────────────────
 $(TARGET): $(OBJS) | $(BINDIR)
 	$(CC) $(CFLAGS) $(OBJS) -o $@ $(LDFLAGS)
@@ -47,6 +60,10 @@ $(TARGET): $(OBJS) | $(BINDIR)
 $(OBJDIR)/%.o: $(SRCDIR)/%.c | $(OBJDIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 	@echo "  CC    $<"
+
+$(UNIT_TARGET): $(UNIT_SRCS) | $(BINDIR)
+	$(CC) $(CFLAGS) $(INCLUDES) $^ -o $@ $(LDFLAGS)
+	@echo "  TEST-LINK $@"
 
 $(BINDIR) $(OBJDIR):
 	@mkdir -p $@

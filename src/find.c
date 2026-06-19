@@ -51,6 +51,9 @@ static void find_callback(const char *query, int key)
         return;
     }
 
+    if (!query || query[0] == '\0')
+        return;
+
     if (key == ARROW_RIGHT || key == ARROW_DOWN) {
         direction = 1;
     } else if (key == ARROW_LEFT || key == ARROW_UP) {
@@ -81,18 +84,17 @@ static void find_callback(const char *query, int key)
 
             /* Save and override highlight for the matching region */
             saved_hl_line = current;
-            if (row->hl) {
+            int qlen = (int)strlen(query);
+            if (row->hl && row->rsize > 0 && qlen > 0) {
                 saved_hl = malloc((size_t)row->rsize);
                 if (saved_hl) {
                     memcpy(saved_hl, row->hl, (size_t)row->rsize);
+                    int mstart = (int)(match - row->render);
+                    memset(&row->hl[mstart], HL_MATCH,
+                           qlen < row->rsize - mstart
+                               ? (size_t)qlen
+                               : (size_t)(row->rsize - mstart));
                 }
-            }
-            if (row->hl) {
-                int qlen = (int)strlen(query);
-                int mstart = (int)(match - row->render);
-                memset(&row->hl[mstart], HL_MATCH,
-                       qlen < row->rsize - mstart ? (size_t)qlen
-                                                  : (size_t)(row->rsize - mstart));
             }
             break;
         }
@@ -153,15 +155,18 @@ static int replace_range_in_row(int row_idx, int start_cx, int end_cx,
     for (int i = 0; i < remove_len; i++) {
         if (start_cx >= row->size) break;
         int deleted = row->chars[start_cx];
+        if (!buffer_row_delete_char(row, start_cx))
+            return 0;
         undo_push(UNDO_DELETE_CHAR, row_idx, start_cx, deleted);
-        buffer_row_delete_char(row, start_cx);
     }
 
     for (int i = 0; i < repl_len; i++) {
+        if (!buffer_row_insert_char(row, start_cx + i,
+                                    (unsigned char)replacement[i])) {
+            return 0;
+        }
         undo_push(UNDO_INSERT_CHAR, row_idx, start_cx + i,
                   (unsigned char)replacement[i]);
-        buffer_row_insert_char(row, start_cx + i,
-                               (unsigned char)replacement[i]);
     }
 
     E.cx = start_cx + repl_len;

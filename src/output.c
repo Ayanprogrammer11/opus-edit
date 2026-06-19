@@ -106,6 +106,8 @@ static int is_separator(int c)
 
 static void ab_append_sanitized(abuf *ab, const char *s, int len)
 {
+    if (!s || len <= 0) return;
+
     int start = 0;
     for (int i = 0; i < len; i++) {
         if (iscntrl((unsigned char)s[i])) {
@@ -162,8 +164,11 @@ static void output_update_syntax_internal(erow *row, int propagate)
 
     unsigned char *tmp = realloc(row->hl, (size_t)row->rsize);
     if (!tmp) {
-        /* realloc failed — keep old hl buffer (stale but safe).
-         * If row->hl is NULL we simply can't highlight this row. */
+        /* Avoid keeping a stale highlight buffer whose size may no
+         * longer match row->rsize. Rendering can safely fall back to
+         * plain text when row->hl is NULL. */
+        free(row->hl);
+        row->hl = NULL;
         return;
     }
     row->hl = tmp;
@@ -661,6 +666,9 @@ static void output_draw_rows(abuf *ab)
                 char welcome[80];
                 int welcomelen = snprintf(welcome, sizeof(welcome),
                     "OpusEdit -- version %s", OPUSEDIT_VERSION);
+                if (welcomelen < 0) welcomelen = 0;
+                if ((size_t)welcomelen >= sizeof(welcome))
+                    welcomelen = (int)sizeof(welcome) - 1;
                 if (welcomelen > text_width)
                     welcomelen = text_width;
 
@@ -858,6 +866,13 @@ static void output_draw_status_bar(abuf *ab)
                         mode,
                         E.syntax ? E.syntax->filetype : "no ft",
                         E.cy + 1, E.numrows, E.cx + 1);
+
+    if (len < 0) len = 0;
+    if (rlen < 0) rlen = 0;
+    if ((size_t)len >= sizeof(status))
+        len = (int)sizeof(status) - 1;
+    if ((size_t)rlen >= sizeof(rstatus))
+        rlen = (int)sizeof(rstatus) - 1;
 
     if (len > E.screencols) len = E.screencols;
     ab_append_sanitized(ab, status, len);

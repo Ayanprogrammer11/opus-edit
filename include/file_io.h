@@ -8,8 +8,9 @@
 /*
  * Open and read `filename` into the editor buffer.
  * Sets E.filename and selects syntax highlighting.
+ * Returns 1 on success, 0 on failure.
  */
-void file_open(const char *filename);
+int file_open(const char *filename);
 
 /*
  * Write the entire buffer to disk. If E.filename is NULL the user

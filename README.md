@@ -21,7 +21,7 @@ A lightweight, terminal-based text editor written in C. It uses `<termios.h>` an
 - **Multi-buffer editing** with buffer cycling and close
 - **Full cursor navigation** — arrows, Home/End, Page Up/Down
 - **Status bar** — filename, modified indicator, filetype, cursor position
-- **Safer file I/O** — permission preservation, complete writes, and `fsync`/`fdatasync` on save
+- **Safer file I/O** — regular-file checks, atomic temp-file saves, permission preservation, and durable syncs
 - **Graceful signal handling** — `SIGWINCH` (resize), `SIGTERM`, `SIGINT`
 - **Memory-safe teardown** — all allocations freed on exit
 - **Line numbers** with toggle (`Ctrl-L` / `:set number`)
@@ -47,10 +47,26 @@ On macOS with Xcode Command Line Tools, zlib is normally available through the s
 make            # default build (-O2)
 make debug      # debug build (-g -O0, AddressSanitizer + UBSan)
 make release    # optimized build (-O3)
+make test       # C mechanical tests + PTY workflow tests
 make clean      # remove build artifacts
 ```
 
 The binary is output to `bin/opusedit`.
+
+## Testing
+
+`make test` runs two complementary suites:
+
+- `bin/unit_core_tests` exercises buffer mutation, undo/redo, wrapping, syntax
+  highlighting, serialization, and file I/O invariants in-process with
+  sanitizers enabled.
+- `tests/workflow_tests.py` drives `bin/opusedit` through a pseudo-terminal and
+  verifies saved files after realistic editing sessions: typing, save/quit,
+  save-as prompts, undo/redo, command mode, replace, search/cancel, navigation
+  keys, visual and Ctrl clipboard operations, invalid open recovery, CLI
+  multi-file startup, control-byte filtering, model-based edit stress,
+  multi-buffer, multi-cursor, rapid paste, tracked Git files, and unsaved
+  close confirmation.
 
 ## Usage
 
@@ -203,7 +219,7 @@ opus-edit/
 | **input** | Byte-level `read()`, multi-byte escape sequence collapsing, command dispatch |
 | **buffer** | Dynamic array of `erow` structs, insert/delete/split, tab expansion, serialization |
 | **output** | `abuf` double-buffering, row rendering with ANSI colors, status & message bars |
-| **file_io** | `fopen` for reading, `open`+`write`+`fsync`/`fdatasync` for durable saves |
+| **file_io** | regular-file reads, atomic temp-file writes, `rename`, and durable file/directory sync |
 | **find** | Prompt-driven incremental search, highlight overlay, bidirectional cycling |
 | **undo** | Operation stack with auto-grouping, inverse computation, cursor restoration |
 

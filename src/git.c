@@ -8,6 +8,7 @@
 #include "git.h"
 #include "editor.h"
 
+#include <errno.h>
 #include <ctype.h>
 #include <limits.h>
 #include <stdio.h>
@@ -19,6 +20,8 @@
 #include <zlib.h>
 
 #define GIT_OID_HEX 40
+#define GIT_MAX_TEXT_BYTES (16U * 1024U * 1024U)
+#define GIT_MAX_OBJECT_BYTES (64U * 1024U * 1024U)
 
 /* ── Utility helpers ─────────────────────────────────────── */
 
@@ -34,6 +37,7 @@ static char *path_join(const char *a, const char *b)
     if (!a || !b) return NULL;
     size_t alen = strlen(a);
     size_t blen = strlen(b);
+    if (blen > SIZE_MAX - 2) return NULL;
     if (alen > SIZE_MAX - blen - 2) return NULL;
     size_t need = alen + blen + 2;
     char *out = malloc(need);
@@ -98,6 +102,10 @@ static char *read_text_file(const char *path)
         fclose(fp);
         return NULL;
     }
+    if (len > (long)GIT_MAX_TEXT_BYTES) {
+        fclose(fp);
+        return NULL;
+    }
     if (fseek(fp, 0, SEEK_SET) != 0) {
         fclose(fp);
         return NULL;
@@ -133,11 +141,15 @@ static int read_file_bytes(const char *path, unsigned char **out, size_t *out_le
         fclose(fp);
         return 0;
     }
+    if (len > (long)GIT_MAX_OBJECT_BYTES) {
+        fclose(fp);
+        return 0;
+    }
     if (fseek(fp, 0, SEEK_SET) != 0) {
         fclose(fp);
         return 0;
     }
-    unsigned char *buf = malloc((size_t)len);
+    unsigned char *buf = malloc((size_t)len ? (size_t)len : 1);
     if (!buf) {
         fclose(fp);
         return 0;
@@ -225,10 +237,16 @@ static int git_find_repo(const char *file_abs, char **out_root, char **out_gitdi
         char *dotgit = path_join(dir, ".git");
         if (dotgit) {
             if (path_is_dir(dotgit)) {
-                *out_root = strdup(dir);
+                char *root_copy = strdup(dir);
+                if (!root_copy) {
+                    free(dotgit);
+                    free(dir);
+                    return 0;
+                }
+                *out_root = root_copy;
                 *out_gitdir = dotgit;
                 free(dir);
-                return (*out_root && *out_gitdir);
+                return 1;
             } else if (path_is_file(dotgit)) {
                 char *gitdir = NULL;
                 if (git_parse_gitdir_file(dotgit, &gitdir)) {
@@ -239,11 +257,18 @@ static int git_find_repo(const char *file_abs, char **out_root, char **out_gitdi
                         resolved = path_join(dir, gitdir);
                         free(gitdir);
                     }
-                    *out_root = strdup(dir);
+                    char *root_copy = resolved ? strdup(dir) : NULL;
+                    if (!root_copy) {
+                        free(resolved);
+                        free(dotgit);
+                        free(dir);
+                        return 0;
+                    }
+                    *out_root = root_copy;
                     *out_gitdir = resolved;
                     free(dotgit);
                     free(dir);
-                    return (*out_root && *out_gitdir);
+                    return 1;
                 }
             }
             free(dotgit);
@@ -382,12 +407,19 @@ static int git_inflate(const unsigned char *in, size_t in_len,
 
     for (;;) {
         if (total >= cap) {
-            size_t newcap = cap * 2;
-            if (newcap < cap || newcap > (size_t)INT_MAX) {
+            if (cap >= (size_t)GIT_MAX_OBJECT_BYTES) {
                 free(buf);
                 inflateEnd(&strm);
                 return 0;
             }
+            size_t newcap = cap * 2;
+            if (newcap < cap) {
+                free(buf);
+                inflateEnd(&strm);
+                return 0;
+            }
+            if (newcap > (size_t)GIT_MAX_OBJECT_BYTES)
+                newcap = (size_t)GIT_MAX_OBJECT_BYTES;
             unsigned char *tmp = realloc(buf, newcap);
             if (!tmp) {
                 free(buf);
@@ -424,7 +456,8 @@ static int git_read_object(const char *gitdir, const char *oid,
 {
     *out_data = NULL;
     *out_len = 0;
-    if (!gitdir || !oid || strlen(oid) < GIT_OID_HEX) return 0;
+    if (!gitdir || !oid || strlen(oid) < GIT_OID_HEX || out_type_len == 0)
+        return 0;
 
     char dir[3] = { oid[0], oid[1], '\0' };
     const char *rest = oid + 2;
@@ -476,21 +509,25 @@ static int git_read_object(const char *gitdir, const char *oid,
     strncpy(out_type, header, out_type_len - 1);
     out_type[out_type_len - 1] = '\0';
     char *size_str = space + 1;
-    unsigned long declared = strtoul(size_str, NULL, 10);
+    char *end = NULL;
+    errno = 0;
+    unsigned long declared = strtoul(size_str, &end, 10);
     size_t data_len = inflated_len - header_len - 1;
-    if (declared != data_len) {
+    if (errno || end == size_str || *end != '\0'
+        || declared != (unsigned long)data_len) {
         free(header);
         free(inflated);
         return 0;
     }
 
-    unsigned char *data = malloc(data_len);
+    unsigned char *data = malloc(data_len ? data_len : 1);
     if (!data) {
         free(header);
         free(inflated);
         return 0;
     }
-    memcpy(data, nul + 1, data_len);
+    if (data_len > 0)
+        memcpy(data, nul + 1, data_len);
     free(header);
     free(inflated);
 
@@ -602,7 +639,11 @@ static int git_tree_find_blob_oid(const char *gitdir, const char *tree_oid,
 static char **git_split_lines(const unsigned char *data, size_t len, int *out_count)
 {
     *out_count = 0;
-    if (!data || len == 0) return NULL;
+    if (!data) return NULL;
+    if (len == 0) {
+        char **lines = calloc(1, sizeof(char *));
+        return lines;
+    }
 
     int count = 0;
     for (size_t i = 0; i < len; i++) {
@@ -704,6 +745,12 @@ static void git_compute_signs_lcs(void)
     for (int i = 0; i < m; i++) signs[i] = ' ';
 
     int *ins_idx = malloc((size_t)m * sizeof(int));
+    if (!ins_idx) {
+        free(signs);
+        free(dp);
+        git_mark_all('-');
+        return;
+    }
     int ins_count = 0;
     int hunk_has_del = 0;
 
@@ -721,7 +768,7 @@ static void git_compute_signs_lcs(void)
             j++;
         } else if (j < m && (i == n
                    || dp[i * (m + 1) + (j + 1)] >= dp[(i + 1) * (m + 1) + j])) {
-            if (ins_idx && ins_count < m)
+            if (ins_count < m)
                 ins_idx[ins_count++] = j;
             j++;
         } else {
