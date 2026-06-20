@@ -10,12 +10,14 @@
 
 #include <errno.h>
 #include <ctype.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <zlib.h>
 
@@ -299,6 +301,42 @@ static char *git_relpath_from_root(const char *root, const char *file_abs)
     return strdup(file_abs + rlen + 1);
 }
 
+static char *git_common_dir(const char *gitdir)
+{
+    if (!gitdir) return NULL;
+
+    char *path = path_join(gitdir, "commondir");
+    if (!path) return NULL;
+    char *content = read_text_file(path);
+    free(path);
+    if (!content)
+        return strdup(gitdir);
+
+    char *p = content;
+    while (*p && isspace((unsigned char)*p)) p++;
+    char *end = p + strlen(p);
+    while (end > p && isspace((unsigned char)end[-1])) end--;
+    *end = '\0';
+
+    char *out = NULL;
+    if (*p == '\0') {
+        out = strdup(gitdir);
+    } else if (*p == '/') {
+        out = strdup(p);
+    } else {
+        out = path_join(gitdir, p);
+    }
+    free(content);
+    if (!out) return NULL;
+
+    char resolved[PATH_MAX];
+    if (realpath(out, resolved)) {
+        free(out);
+        return strdup(resolved);
+    }
+    return out;
+}
+
 /* ── Git ref resolution ──────────────────────────────────── */
 
 static int git_copy_oid(char out[GIT_OID_HEX + 1], const char *src)
@@ -312,27 +350,33 @@ static int git_copy_oid(char out[GIT_OID_HEX + 1], const char *src)
     return 1;
 }
 
-static int git_resolve_ref(const char *gitdir, const char *ref, char out[GIT_OID_HEX + 1])
+static int git_resolve_ref_file(const char *dir, const char *ref,
+                                char out[GIT_OID_HEX + 1])
 {
-    if (!gitdir || !ref) return 0;
-    char *path = path_join(gitdir, ref);
-    if (path) {
-        char *txt = read_text_file(path);
-        free(path);
-        if (txt) {
-            char *p = txt;
-            while (*p && isspace((unsigned char)*p)) p++;
-            int ok = git_copy_oid(out, p);
-            free(txt);
-            if (ok) return 1;
-        }
-    }
+    if (!dir || !ref) return 0;
+    char *path = path_join(dir, ref);
+    if (!path) return 0;
+    char *txt = read_text_file(path);
+    free(path);
+    if (!txt) return 0;
 
-    char *packed = path_join(gitdir, "packed-refs");
+    char *p = txt;
+    while (*p && isspace((unsigned char)*p)) p++;
+    int ok = git_copy_oid(out, p);
+    free(txt);
+    return ok;
+}
+
+static int git_resolve_packed_ref(const char *dir, const char *ref,
+                                  char out[GIT_OID_HEX + 1])
+{
+    if (!dir || !ref) return 0;
+    char *packed = path_join(dir, "packed-refs");
     if (!packed) return 0;
     FILE *fp = fopen(packed, "rb");
     free(packed);
     if (!fp) return 0;
+
     char line[1024];
     int found = 0;
     while (fgets(line, sizeof(line), fp)) {
@@ -348,6 +392,35 @@ static int git_resolve_ref(const char *gitdir, const char *ref, char out[GIT_OID
         }
     }
     fclose(fp);
+    return found;
+}
+
+static int git_resolve_ref(const char *gitdir, const char *ref,
+                           char out[GIT_OID_HEX + 1])
+{
+    if (!gitdir || !ref) return 0;
+
+    if (git_resolve_ref_file(gitdir, ref, out))
+        return 1;
+
+    char *common = git_common_dir(gitdir);
+    if (common && strcmp(common, gitdir) != 0) {
+        if (git_resolve_ref_file(common, ref, out)) {
+            free(common);
+            return 1;
+        }
+    }
+
+    if (git_resolve_packed_ref(gitdir, ref, out)) {
+        free(common);
+        return 1;
+    }
+
+    int found = 0;
+    if (common && strcmp(common, gitdir) != 0) {
+        found = git_resolve_packed_ref(common, ref, out);
+    }
+    free(common);
     return found;
 }
 
@@ -450,9 +523,151 @@ static int git_inflate(const unsigned char *in, size_t in_len,
     return 1;
 }
 
-static int git_read_object(const char *gitdir, const char *oid,
-                           char *out_type, size_t out_type_len,
-                           unsigned char **out_data, size_t *out_len)
+static int git_run_capture(char *const argv[],
+                           unsigned char **out, size_t *out_len,
+                           size_t max_len)
+{
+    *out = NULL;
+    *out_len = 0;
+    if (!argv || !argv[0] || max_len == 0) return 0;
+
+    int pipefd[2];
+    if (pipe(pipefd) != 0) return 0;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return 0;
+    }
+
+    if (pid == 0) {
+        close(pipefd[0]);
+        if (dup2(pipefd[1], STDOUT_FILENO) < 0)
+            _exit(127);
+        close(pipefd[1]);
+
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) {
+            (void)dup2(devnull, STDERR_FILENO);
+            close(devnull);
+        }
+
+        execvp(argv[0], argv);
+        _exit(127);
+    }
+
+    close(pipefd[1]);
+
+    size_t cap = max_len < 4096U ? max_len : 4096U;
+    if (cap == 0) cap = 1;
+    unsigned char *buf = malloc(cap);
+    if (!buf) {
+        close(pipefd[0]);
+        int status = 0;
+        (void)waitpid(pid, &status, 0);
+        return 0;
+    }
+
+    size_t total = 0;
+    int failed = 0;
+    for (;;) {
+        unsigned char tmp[4096];
+        ssize_t n = read(pipefd[0], tmp, sizeof(tmp));
+        if (n == 0) break;
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            failed = 1;
+            break;
+        }
+        if ((size_t)n > max_len - total) {
+            failed = 1;
+            break;
+        }
+        if (total + (size_t)n > cap) {
+            size_t newcap = cap;
+            while (newcap < total + (size_t)n) {
+                if (newcap > max_len / 2) {
+                    newcap = max_len;
+                    break;
+                }
+                newcap *= 2;
+            }
+            unsigned char *grown = realloc(buf, newcap);
+            if (!grown) {
+                failed = 1;
+                break;
+            }
+            buf = grown;
+            cap = newcap;
+        }
+        memcpy(buf + total, tmp, (size_t)n);
+        total += (size_t)n;
+    }
+
+    close(pipefd[0]);
+
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno == EINTR) continue;
+        failed = 1;
+        break;
+    }
+
+    if (failed || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        free(buf);
+        return 0;
+    }
+
+    *out = buf;
+    *out_len = total;
+    return 1;
+}
+
+static int git_cat_file_object(const char *gitdir, const char *oid,
+                               char *out_type, size_t out_type_len,
+                               unsigned char **out_data, size_t *out_len)
+{
+    *out_data = NULL;
+    *out_len = 0;
+    if (!gitdir || !oid || out_type_len == 0) return 0;
+
+    unsigned char *type_raw = NULL;
+    size_t type_len = 0;
+    char *type_argv[] = {
+        "git", "--git-dir", (char *)gitdir, "cat-file", "-t", (char *)oid,
+        NULL
+    };
+    if (!git_run_capture(type_argv, &type_raw, &type_len, 128))
+        return 0;
+
+    while (type_len > 0 && isspace((unsigned char)type_raw[type_len - 1]))
+        type_len--;
+    if (type_len == 0 || type_len >= out_type_len) {
+        free(type_raw);
+        return 0;
+    }
+    for (size_t i = 0; i < type_len; i++) {
+        if (isspace((unsigned char)type_raw[i])) {
+            free(type_raw);
+            return 0;
+        }
+        out_type[i] = (char)type_raw[i];
+    }
+    out_type[type_len] = '\0';
+    free(type_raw);
+
+    char *data_argv[] = {
+        "git", "--git-dir", (char *)gitdir, "cat-file", out_type, (char *)oid,
+        NULL
+    };
+    return git_run_capture(data_argv, out_data, out_len,
+                           (size_t)GIT_MAX_OBJECT_BYTES);
+}
+
+static int git_read_loose_object(const char *gitdir, const char *oid,
+                                 char *out_type, size_t out_type_len,
+                                 unsigned char **out_data, size_t *out_len)
 {
     *out_data = NULL;
     *out_len = 0;
@@ -536,6 +751,29 @@ static int git_read_object(const char *gitdir, const char *oid,
     return 1;
 }
 
+static int git_read_object(const char *gitdir, const char *oid,
+                           char *out_type, size_t out_type_len,
+                           unsigned char **out_data, size_t *out_len)
+{
+    if (git_read_loose_object(gitdir, oid, out_type, out_type_len,
+                              out_data, out_len)) {
+        return 1;
+    }
+
+    char *common = git_common_dir(gitdir);
+    if (common && strcmp(common, gitdir) != 0) {
+        if (git_read_loose_object(common, oid, out_type, out_type_len,
+                                  out_data, out_len)) {
+            free(common);
+            return 1;
+        }
+    }
+    free(common);
+
+    return git_cat_file_object(gitdir, oid, out_type, out_type_len,
+                               out_data, out_len);
+}
+
 static void git_oid_to_hex(const unsigned char *oid, char out[GIT_OID_HEX + 1])
 {
     static const char *hex = "0123456789abcdef";
@@ -579,37 +817,52 @@ static int git_is_tree_mode(const char *mode, size_t len)
         || (len == 6 && memcmp(mode, "040000", 6) == 0);
 }
 
-static int git_tree_find_blob_oid(const char *gitdir, const char *tree_oid,
-                                  char **parts, int idx, int count,
-                                  char out_blob[GIT_OID_HEX + 1])
+typedef enum git_lookup_result {
+    GIT_LOOKUP_ERROR = -1,
+    GIT_LOOKUP_MISSING = 0,
+    GIT_LOOKUP_FOUND = 1
+} git_lookup_result;
+
+static git_lookup_result git_tree_find_blob_oid(
+    const char *gitdir, const char *tree_oid, char **parts, int idx, int count,
+    char out_blob[GIT_OID_HEX + 1])
 {
-    if (idx >= count) return 0;
+    if (idx >= count) return GIT_LOOKUP_MISSING;
     unsigned char *data = NULL;
     size_t len = 0;
     char type[16];
     if (!git_read_object(gitdir, tree_oid, type, sizeof(type), &data, &len))
-        return 0;
+        return GIT_LOOKUP_ERROR;
     if (strcmp(type, "tree") != 0) {
         free(data);
-        return 0;
+        return GIT_LOOKUP_ERROR;
     }
 
     size_t pos = 0;
-    int found = 0;
+    git_lookup_result found = GIT_LOOKUP_MISSING;
     while (pos < len) {
         size_t mode_start = pos;
         while (pos < len && data[pos] != ' ') pos++;
-        if (pos >= len) break;
+        if (pos >= len) {
+            found = GIT_LOOKUP_ERROR;
+            break;
+        }
         size_t mode_len = pos - mode_start;
         pos++; /* space */
 
         size_t name_start = pos;
         while (pos < len && data[pos] != '\0') pos++;
-        if (pos >= len) break;
+        if (pos >= len) {
+            found = GIT_LOOKUP_ERROR;
+            break;
+        }
         size_t name_len = pos - name_start;
         pos++; /* NUL */
 
-        if (pos + 20 > len) break;
+        if (pos + 20 > len) {
+            found = GIT_LOOKUP_ERROR;
+            break;
+        }
         const unsigned char *oid = data + pos;
         pos += 20;
 
@@ -618,7 +871,7 @@ static int git_tree_find_blob_oid(const char *gitdir, const char *tree_oid,
             if (idx == count - 1) {
                 if (!git_is_tree_mode((const char *)(data + mode_start), mode_len)) {
                     git_oid_to_hex(oid, out_blob);
-                    found = 1;
+                    found = GIT_LOOKUP_FOUND;
                 }
             } else {
                 if (git_is_tree_mode((const char *)(data + mode_start), mode_len)) {
@@ -837,6 +1090,14 @@ static void git_compute_signs_lcs(void)
 
 /* ── Public API ──────────────────────────────────────────── */
 
+static void git_disable_gutter(void)
+{
+    E.git_available = 0;
+    E.git_tracked = 0;
+    E.git_signs_dirty = 0;
+    git_clear_signs();
+}
+
 void git_on_file_change(void)
 {
     /* Clear any previous git state */
@@ -888,8 +1149,7 @@ void git_on_file_change(void)
 
     char tree_oid[GIT_OID_HEX + 1];
     if (!git_commit_tree_oid(E.git_gitdir, head_oid, tree_oid)) {
-        E.git_tracked = 0;
-        E.git_signs_dirty = 1;
+        git_disable_gutter();
         return;
     }
 
@@ -922,8 +1182,15 @@ void git_on_file_change(void)
     }
     part_count = idx;
 
-    if (!git_tree_find_blob_oid(E.git_gitdir, tree_oid,
-                                parts, 0, part_count, blob_oid)) {
+    git_lookup_result blob_lookup = git_tree_find_blob_oid(
+        E.git_gitdir, tree_oid, parts, 0, part_count, blob_oid);
+    if (blob_lookup == GIT_LOOKUP_ERROR) {
+        git_disable_gutter();
+        free(parts);
+        free(path_copy);
+        return;
+    }
+    if (blob_lookup == GIT_LOOKUP_MISSING) {
         E.git_tracked = 0;
         E.git_signs_dirty = 1;
         free(parts);
@@ -938,15 +1205,13 @@ void git_on_file_change(void)
     char type[16];
     if (!git_read_object(E.git_gitdir, blob_oid, type, sizeof(type),
                          &blob, &blob_len)) {
-        E.git_tracked = 0;
-        E.git_signs_dirty = 1;
+        git_disable_gutter();
         return;
     }
 
     if (strcmp(type, "blob") != 0) {
         free(blob);
-        E.git_tracked = 0;
-        E.git_signs_dirty = 1;
+        git_disable_gutter();
         return;
     }
 

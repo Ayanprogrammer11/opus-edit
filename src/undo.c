@@ -10,6 +10,7 @@
 #include "undo.h"
 #include "editor.h"
 #include "buffer.h"
+#include "git.h"
 #include "output.h"
 
 #include <stdlib.h>
@@ -61,6 +62,12 @@ static int stack_push_raw(undo_stack *s, const undo_op *op)
 static int next_group_id = 1;
 static int force_new_group = 0;
 static int explicit_group_id = 0;
+static int explicit_group_depth = 0;
+
+static int undo_type_is_char_insert(enum undo_op_type type)
+{
+    return type == UNDO_INSERT_CHAR || type == UNDO_INSERT_CHAR_ROW;
+}
 
 /*
  * Determine whether a new operation should join the current group
@@ -91,14 +98,21 @@ static int resolve_group_id(enum undo_op_type type, int row, int col)
     if (type == UNDO_INSERT_NEWLINE || type == UNDO_DELETE_NEWLINE)
         return next_group_id++;
 
-    if (prev->type != type)
+    if (type == UNDO_SET_FINAL_NEWLINE)
         return next_group_id++;
+
+    if (undo_type_is_char_insert(type)) {
+        if (!undo_type_is_char_insert(prev->type))
+            return next_group_id++;
+    } else if (prev->type != type) {
+        return next_group_id++;
+    }
 
     if (prev->row != row)
         return next_group_id++;
 
     /* For inserts: new col should be prev->col + 1 (typing forward) */
-    if (type == UNDO_INSERT_CHAR && col == prev->col + 1)
+    if (undo_type_is_char_insert(type) && col == prev->col + 1)
         return prev->group_id;
 
     /* For deletes: backspace goes col = prev->col - 1, or same col (Del key) */
@@ -142,11 +156,21 @@ void undo_begin_group(void)
         explicit_group_id = next_group_id++;
         force_new_group = 0;
     }
+    explicit_group_depth++;
 }
 
 void undo_end_group(void)
 {
-    explicit_group_id = 0;
+    if (explicit_group_depth > 0)
+        explicit_group_depth--;
+    if (explicit_group_depth == 0)
+        explicit_group_id = 0;
+}
+
+void undo_push_final_newline(int old_value, int new_value)
+{
+    undo_push(UNDO_SET_FINAL_NEWLINE, old_value ? 1 : 0,
+              new_value ? 1 : 0, 0);
 }
 
 /* ── Reverse a single operation ───────────────────────────── */
@@ -160,14 +184,15 @@ static int apply_inverse(const undo_op *op)
 {
     switch (op->type) {
         case UNDO_INSERT_CHAR:
+        case UNDO_INSERT_CHAR_ROW:
             /* A char was inserted → delete it */
             if (op->row >= 0 && op->row < E.numrows) {
                 if (!buffer_row_delete_char(&E.row[op->row], op->col))
                     return 0;
-                if (E.numrows == 1 && E.row[0].size == 0
-                    && E.saved_len == 0) {
-                    buffer_delete_row(0);
-                }
+                if (op->type == UNDO_INSERT_CHAR_ROW
+                    && op->row >= 0 && op->row < E.numrows
+                    && E.row[op->row].size == 0)
+                    buffer_delete_row(op->row);
                 return 1;
             }
             return 0;
@@ -212,6 +237,12 @@ static int apply_inverse(const undo_op *op)
                 }
             }
             return 1;
+
+        case UNDO_SET_FINAL_NEWLINE:
+            E.ends_with_newline = op->row ? 1 : 0;
+            editor_mark_dirty();
+            git_mark_dirty();
+            return 1;
     }
     return 1;
 }
@@ -221,7 +252,10 @@ static int apply_forward(const undo_op *op)
 {
     switch (op->type) {
         case UNDO_INSERT_CHAR:
-            if (op->row == E.numrows && op->col == 0) {
+        case UNDO_INSERT_CHAR_ROW:
+            if ((op->type == UNDO_INSERT_CHAR_ROW
+                 || (op->row == E.numrows && op->col == 0))
+                && op->row == E.numrows) {
                 if (!buffer_insert_row(E.numrows, "", 0))
                     return 0;
             }
@@ -264,6 +298,12 @@ static int apply_forward(const undo_op *op)
                 }
                 buffer_delete_row(op->row + 1);
             }
+            return 1;
+
+        case UNDO_SET_FINAL_NEWLINE:
+            E.ends_with_newline = op->col ? 1 : 0;
+            editor_mark_dirty();
+            git_mark_dirty();
             return 1;
     }
     return 1;
@@ -355,6 +395,7 @@ void undo_perform_redo(void)
         /* Compute where cursor should end up after this op */
         switch (op.type) {
             case UNDO_INSERT_CHAR:
+            case UNDO_INSERT_CHAR_ROW:
                 last_cx = op.col + 1;
                 last_cy = op.row;
                 break;
@@ -369,6 +410,8 @@ void undo_perform_redo(void)
             case UNDO_DELETE_NEWLINE:
                 last_cx = op.col;
                 last_cy = op.row;
+                break;
+            case UNDO_SET_FINAL_NEWLINE:
                 break;
         }
 

@@ -9,6 +9,7 @@
 #include "terminal.h"
 #include "find.h"
 #include "file_io.h"
+#include "git.h"
 #include "undo.h"
 
 #include <errno.h>
@@ -602,11 +603,13 @@ static void mcursors_apply_insert_char(int c)
     for (int i = 0; i < count; i++) {
         int row = list[i].cy;
         int col = list[i].cx;
+        int created_row = 0;
         if (row < 0) continue;
         if (row > E.numrows) continue;
         if (row == E.numrows) {
             if (!buffer_insert_row(E.numrows, "", 0))
                 continue;
+            created_row = 1;
         }
         if (col < 0) col = 0;
         if (col > E.row[row].size) col = E.row[row].size;
@@ -614,7 +617,8 @@ static void mcursors_apply_insert_char(int c)
         E.cy = row;
         E.cx = col;
         if (buffer_row_insert_char(&E.row[row], col, c)) {
-            undo_push(UNDO_INSERT_CHAR, row, col, c);
+            undo_push(created_row ? UNDO_INSERT_CHAR_ROW : UNDO_INSERT_CHAR,
+                      row, col, c);
             mcursors_shift_after_insert(list, count, row, col);
         }
     }
@@ -785,8 +789,10 @@ static void linewise_delete_bounds(int *sy, int *sx, int *ey, int *ex)
 static void delete_empty_single_row_after_linewise(void)
 {
     if (E.numrows == 1 && E.row[0].size == 0 && E.ends_with_newline) {
+        undo_push_final_newline(1, 0);
         E.ends_with_newline = 0;
         editor_mark_dirty();
+        git_mark_dirty();
     }
 }
 
@@ -897,9 +903,11 @@ static void cut_selection_or_line(void)
         linewise_delete_bounds(&dsy, &dsx, &dey, &dex);
     }
 
+    undo_begin_group();
     delete_range(dsy, dsx, dey, dex);
     if (linewise)
         delete_empty_single_row_after_linewise();
+    undo_end_group();
     E.cy = sy;
     if (E.cy >= E.numrows) E.cy = E.numrows ? E.numrows - 1 : 0;
     E.cx = sx;
@@ -970,10 +978,12 @@ static void paste_clipboard(void)
         editor_set_status_message("Clipboard empty.");
         return;
     }
+    undo_begin_group();
     if (E.clipboard_linewise)
         paste_linewise();
     else
         paste_charwise();
+    undo_end_group();
 }
 
 static void delete_active_selection_only(void)
@@ -988,9 +998,11 @@ static void delete_active_selection_only(void)
         linewise_delete_bounds(&dsy, &dsx, &dey, &dex);
     }
 
+    undo_begin_group();
     delete_range(dsy, dsx, dey, dex);
     if (linewise)
         delete_empty_single_row_after_linewise();
+    undo_end_group();
     E.cy = sy;
     if (E.cy >= E.numrows) E.cy = E.numrows ? E.numrows - 1 : 0;
     E.cx = sx;

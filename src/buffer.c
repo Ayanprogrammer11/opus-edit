@@ -257,15 +257,18 @@ int buffer_row_append_string(erow *row, const char *s, size_t len)
 
 void buffer_insert_char(int c)
 {
+    int created_row = 0;
     if (E.cy == E.numrows) {
         if (!buffer_insert_row(E.numrows, "", 0))
             return;
+        created_row = 1;
     }
     if (E.cy < 0 || E.cy >= E.numrows) return;
     if (E.cx < 0) E.cx = 0;
     if (E.cx > E.row[E.cy].size) E.cx = E.row[E.cy].size;
     if (buffer_row_insert_char(&E.row[E.cy], E.cx, c)) {
-        undo_push(UNDO_INSERT_CHAR, E.cy, E.cx, c);
+        undo_push(created_row ? UNDO_INSERT_CHAR_ROW : UNDO_INSERT_CHAR,
+                  E.cy, E.cx, c);
         E.cx++;
     }
 }

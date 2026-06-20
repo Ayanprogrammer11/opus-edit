@@ -309,6 +309,32 @@ def scenario_unnamed_first_insert_undo_saves_empty(binary: Path, root: Path) -> 
     assert_file(target, b"")
 
 
+def scenario_insert_undo_preserves_existing_blank_row(binary: Path, root: Path) -> None:
+    target = root / "insert-undo-preserves-blank.txt"
+    with EditorSession(binary, None, "insert undo preserves blank") as ed:
+        ed.send(ENTER)
+        ed.send(UP)
+        ed.send(b"a")
+        ed.send(CTRL_Z)
+        ed.send(CTRL_S)
+        ed.send(str(target) + "\r")
+        ed.send(CTRL_Q)
+        ed.wait_exit()
+    assert_file(target, b"\n")
+
+
+def scenario_insert_undo_removes_created_eof_row(binary: Path, root: Path) -> None:
+    target = root / "insert-undo-removes-eof-row.txt"
+    target.write_bytes(b"one\n")
+    with EditorSession(binary, target, "insert undo removes eof row") as ed:
+        ed.send(DOWN)
+        ed.send(b"x")
+        ed.send(CTRL_Z)
+        ed.send(CTRL_S + CTRL_Q)
+        ed.wait_exit()
+    assert_file(target, b"one\n")
+
+
 def scenario_newline_undo_redo(binary: Path, root: Path) -> None:
     target = root / "newline-redo.txt"
     with EditorSession(binary, target, "newline undo redo") as ed:
@@ -897,6 +923,44 @@ def scenario_linewise_delete_final_line(binary: Path, root: Path) -> None:
     assert_file(target, b"one\n")
 
 
+def scenario_linewise_delete_only_line_undo(binary: Path, root: Path) -> None:
+    target = root / "linewise-delete-only-undo.txt"
+    target.write_bytes(b"one\n")
+    with EditorSession(binary, target, "linewise delete only undo") as ed:
+        ed.send(ESC, pause=0.2)
+        ed.send(b"Vd")
+        ed.send(CTRL_Z)
+        ed.send(CTRL_S + CTRL_Q)
+        ed.wait_exit()
+    assert_file(target, b"one\n")
+
+
+def scenario_linewise_delete_final_line_undo(binary: Path, root: Path) -> None:
+    target = root / "linewise-delete-final-undo.txt"
+    target.write_bytes(b"one\ntwo\n")
+    with EditorSession(binary, target, "linewise delete final undo") as ed:
+        ed.send(DOWN)
+        ed.send(ESC, pause=0.2)
+        ed.send(b"Vd")
+        ed.send(CTRL_Z)
+        ed.send(CTRL_S + CTRL_Q)
+        ed.wait_exit()
+    assert_file(target, b"one\ntwo\n")
+
+
+def scenario_linewise_paste_undo_groups(binary: Path, root: Path) -> None:
+    target = root / "linewise-paste-undo.txt"
+    target.write_bytes(b"one\ntwo\n")
+    with EditorSession(binary, target, "linewise paste undo") as ed:
+        ed.send(ESC, pause=0.2)
+        ed.send(b"yy")
+        ed.send(b"p")
+        ed.send(CTRL_Z)
+        ed.send(CTRL_S + CTRL_Q)
+        ed.wait_exit()
+    assert_file(target, b"one\ntwo\n")
+
+
 def scenario_linewise_paste_into_empty_buffer(binary: Path, root: Path) -> None:
     source = root / "linewise-paste-source.txt"
     target = root / "linewise-paste-empty.txt"
@@ -932,6 +996,8 @@ SCENARIOS = [
     scenario_undo_back_to_saved_quits_cleanly,
     scenario_first_typed_run_undoes_together,
     scenario_unnamed_first_insert_undo_saves_empty,
+    scenario_insert_undo_preserves_existing_blank_row,
+    scenario_insert_undo_removes_created_eof_row,
     scenario_newline_undo_redo,
     scenario_command_trim_duplicate,
     scenario_visual_line_copy_paste,
@@ -970,6 +1036,9 @@ SCENARIOS = [
     scenario_command_replace_and_help,
     scenario_multi_cursor_down_backspace,
     scenario_linewise_delete_final_line,
+    scenario_linewise_delete_only_line_undo,
+    scenario_linewise_delete_final_line_undo,
+    scenario_linewise_paste_undo_groups,
     scenario_linewise_paste_into_empty_buffer,
     scenario_mouse_scroll_is_non_destructive,
 ]

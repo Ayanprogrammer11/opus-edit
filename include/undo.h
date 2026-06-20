@@ -21,9 +21,11 @@
 /* ── Operation types ──────────────────────────────────────── */
 enum undo_op_type {
     UNDO_INSERT_CHAR,       /* a character was inserted              */
+    UNDO_INSERT_CHAR_ROW,   /* inserted char also created its row    */
     UNDO_DELETE_CHAR,       /* a character was deleted                */
     UNDO_INSERT_NEWLINE,    /* a newline was inserted (row split)    */
     UNDO_DELETE_NEWLINE,    /* a newline was deleted  (row merge)    */
+    UNDO_SET_FINAL_NEWLINE, /* final newline flag changed             */
 };
 
 /* ── Single atomic operation ──────────────────────────────── */
@@ -57,6 +59,9 @@ void undo_stack_clear(undo_stack *s);
  * Pushing to the undo stack also clears the redo stack.
  */
 void undo_push(enum undo_op_type type, int row, int col, int c);
+
+/* Record a change to the buffer's final-newline state. */
+void undo_push_final_newline(int old_value, int new_value);
 
 /* Force the next recorded operation to start a fresh undo group. */
 void undo_break_group(void);

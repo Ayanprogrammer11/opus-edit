@@ -1,16 +1,19 @@
 #include "buffer.h"
 #include "editor.h"
 #include "file_io.h"
+#include "git.h"
 #include "output.h"
 #include "undo.h"
 
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 static int tests_run = 0;
@@ -190,6 +193,82 @@ static int dir_has_temp_for(const char *dir, const char *base)
     }
     closedir(dp);
     return found;
+}
+
+static int write_file_exact(const char *path, const char *data)
+{
+    FILE *fp = fopen(path, "wb");
+    if (!fp) return 0;
+    size_t len = strlen(data);
+    int ok = fwrite(data, 1, len, fp) == len;
+    if (fclose(fp) != 0) ok = 0;
+    return ok;
+}
+
+static void remove_tree(const char *path)
+{
+    DIR *dp = opendir(path);
+    if (!dp) {
+        (void)unlink(path);
+        return;
+    }
+
+    struct dirent *ent;
+    while ((ent = readdir(dp)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+            continue;
+        char *child = join_path(path, ent->d_name);
+        if (!child) continue;
+        struct stat st;
+        if (lstat(child, &st) == 0 && S_ISDIR(st.st_mode)) {
+            remove_tree(child);
+        } else {
+            (void)unlink(child);
+        }
+        free(child);
+    }
+
+    closedir(dp);
+    (void)rmdir(path);
+}
+
+static int run_cmd(const char *cwd, char *const argv[])
+{
+    pid_t pid = fork();
+    if (pid < 0) return 0;
+    if (pid == 0) {
+        if (cwd && chdir(cwd) != 0)
+            _exit(127);
+
+        int devnull = open("/dev/null", O_RDWR);
+        if (devnull >= 0) {
+            (void)dup2(devnull, STDIN_FILENO);
+            (void)dup2(devnull, STDOUT_FILENO);
+            (void)dup2(devnull, STDERR_FILENO);
+            close(devnull);
+        }
+
+        execvp(argv[0], argv);
+        _exit(127);
+    }
+
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno == EINTR) continue;
+        return 0;
+    }
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+static int git_available_for_tests(void)
+{
+    char *const args[] = { "git", "--version", NULL };
+    return run_cmd(NULL, args);
+}
+
+static int run_git(const char *cwd, char *const args[])
+{
+    return run_cmd(cwd, args);
 }
 
 static void test_row_rendering_and_coordinates(void)
@@ -563,6 +642,109 @@ static void test_file_save_symlink_umask_and_long_name(void)
     free(target);
 }
 
+static void assert_clean_git_gutter_for_file(const char *path)
+{
+    reset_editor_state();
+    CHECK(file_open(path));
+    E.show_git_gutter = 1;
+    git_refresh_signs();
+    CHECK_INT(E.git_available, 1);
+    CHECK_INT(E.git_tracked, 1);
+    CHECK_INT(git_sign_for_row(0), ' ');
+}
+
+static void test_git_packed_objects_and_worktrees(void)
+{
+    if (!git_available_for_tests())
+        return;
+
+    reset_editor_state();
+    char tmpl[] = "/tmp/opusedit-git-XXXXXX";
+    char *dir = mkdtemp(tmpl);
+    CHECK(dir != NULL);
+    if (!dir) return;
+
+    char *repo = join_path(dir, "repo");
+    char *linked = join_path(dir, "linked");
+    char *tracked = NULL;
+    char *linked_tracked = NULL;
+    char *untracked = NULL;
+    int worktree_added = 0;
+
+    CHECK(repo != NULL);
+    CHECK(linked != NULL);
+    if (!repo || !linked)
+        goto cleanup;
+
+    CHECK(mkdir(repo, 0700) == 0);
+    tracked = join_path(repo, "tracked.txt");
+    linked_tracked = join_path(linked, "tracked.txt");
+    untracked = join_path(repo, "new.txt");
+    CHECK(tracked != NULL);
+    CHECK(linked_tracked != NULL);
+    CHECK(untracked != NULL);
+    if (!tracked || !linked_tracked || !untracked)
+        goto cleanup;
+
+    char *const init_args[] = { "git", "init", "-q", NULL };
+    char *const email_args[] = {
+        "git", "config", "user.email", "opusedit@example.invalid", NULL
+    };
+    char *const name_args[] = {
+        "git", "config", "user.name", "OpusEdit Tests", NULL
+    };
+    char *const add_args[] = { "git", "add", "tracked.txt", NULL };
+    char *const commit_args[] = {
+        "git", "commit", "-q", "-m", "base", NULL
+    };
+    char *const repack_args[] = { "git", "repack", "-ad", NULL };
+    char *const prune_packed_args[] = { "git", "prune-packed", NULL };
+
+    CHECK(run_git(repo, init_args));
+    CHECK(run_git(repo, email_args));
+    CHECK(run_git(repo, name_args));
+    CHECK(write_file_exact(tracked, "base\n"));
+    CHECK(run_git(repo, add_args));
+    CHECK(run_git(repo, commit_args));
+    CHECK(run_git(repo, repack_args));
+    CHECK(run_git(repo, prune_packed_args));
+
+    assert_clean_git_gutter_for_file(tracked);
+
+    char *const worktree_args[] = {
+        "git", "worktree", "add", "-q", "-b", "opusedit-side", linked,
+        "HEAD", NULL
+    };
+    worktree_added = run_git(repo, worktree_args);
+    CHECK(worktree_added);
+    if (worktree_added)
+        assert_clean_git_gutter_for_file(linked_tracked);
+
+    reset_editor_state();
+    CHECK(write_file_exact(untracked, "new\n"));
+    CHECK(file_open(untracked));
+    E.show_git_gutter = 1;
+    git_refresh_signs();
+    CHECK_INT(E.git_available, 1);
+    CHECK_INT(E.git_tracked, 0);
+    CHECK_INT(git_sign_for_row(0), '+');
+
+cleanup:
+    if (worktree_added) {
+        char *const remove_args[] = {
+            "git", "worktree", "remove", "-f", linked, NULL
+        };
+        (void)run_git(repo, remove_args);
+    }
+    reset_editor_state();
+    remove_tree(dir);
+    free(untracked);
+    free(linked_tracked);
+    free(tracked);
+    free(linked);
+    free(repo);
+}
+
 int main(void)
 {
     test_row_rendering_and_coordinates();
@@ -575,6 +757,7 @@ int main(void)
     test_file_save_open_and_permissions();
     test_file_preserves_missing_final_newline();
     test_file_save_symlink_umask_and_long_name();
+    test_git_packed_objects_and_worktrees();
     reset_editor_state();
 
     if (tests_failed) {

@@ -76,9 +76,9 @@ clean:
 $(OBJDIR)/main.o:      $(INCDIR)/editor.h $(INCDIR)/terminal.h $(INCDIR)/input.h $(INCDIR)/output.h $(INCDIR)/file_io.h
 $(OBJDIR)/editor.o:    $(INCDIR)/editor.h $(INCDIR)/terminal.h $(INCDIR)/input.h $(INCDIR)/output.h $(INCDIR)/undo.h $(INCDIR)/git.h
 $(OBJDIR)/terminal.o:  $(INCDIR)/editor.h $(INCDIR)/terminal.h $(INCDIR)/output.h
-$(OBJDIR)/input.o:     $(INCDIR)/editor.h $(INCDIR)/input.h $(INCDIR)/buffer.h $(INCDIR)/output.h $(INCDIR)/find.h $(INCDIR)/file_io.h $(INCDIR)/undo.h
+$(OBJDIR)/input.o:     $(INCDIR)/editor.h $(INCDIR)/input.h $(INCDIR)/buffer.h $(INCDIR)/output.h $(INCDIR)/find.h $(INCDIR)/file_io.h $(INCDIR)/git.h $(INCDIR)/undo.h
 $(OBJDIR)/buffer.o:    $(INCDIR)/editor.h $(INCDIR)/buffer.h $(INCDIR)/output.h $(INCDIR)/undo.h $(INCDIR)/git.h
 $(OBJDIR)/output.o:    $(INCDIR)/editor.h $(INCDIR)/output.h $(INCDIR)/buffer.h $(INCDIR)/git.h
 $(OBJDIR)/file_io.o:   $(INCDIR)/editor.h $(INCDIR)/file_io.h $(INCDIR)/buffer.h $(INCDIR)/output.h $(INCDIR)/git.h
 $(OBJDIR)/find.o:      $(INCDIR)/editor.h $(INCDIR)/find.h $(INCDIR)/input.h $(INCDIR)/output.h $(INCDIR)/buffer.h
-$(OBJDIR)/undo.o:      $(INCDIR)/editor.h $(INCDIR)/undo.h $(INCDIR)/buffer.h $(INCDIR)/output.h
+$(OBJDIR)/undo.o:      $(INCDIR)/editor.h $(INCDIR)/undo.h $(INCDIR)/buffer.h $(INCDIR)/git.h $(INCDIR)/output.h
