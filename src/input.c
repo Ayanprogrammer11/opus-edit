@@ -139,8 +139,9 @@ int input_read_key(void)
                     (void)y;
                     if (b == 64) return MOUSE_SCROLL_UP;
                     if (b == 65) return MOUSE_SCROLL_DOWN;
+                    return MOUSE_EVENT;
                 }
-                return '\x1b';
+                return MOUSE_EVENT;
             }
             if (seq[1] >= '0' && seq[1] <= '9') {
                 if (!input_read_byte(&seq[2], 0)) return '\x1b';
@@ -1124,6 +1125,9 @@ void input_process_keypress(void)
             break;
         case MOUSE_SCROLL_DOWN:
             editor_move_render_rows(3);
+            handled = 1;
+            break;
+        case MOUSE_EVENT:
             handled = 1;
             break;
 

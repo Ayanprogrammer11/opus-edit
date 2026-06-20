@@ -80,5 +80,5 @@ $(OBJDIR)/input.o:     $(INCDIR)/editor.h $(INCDIR)/input.h $(INCDIR)/buffer.h $
 $(OBJDIR)/buffer.o:    $(INCDIR)/editor.h $(INCDIR)/buffer.h $(INCDIR)/output.h $(INCDIR)/undo.h $(INCDIR)/git.h
 $(OBJDIR)/output.o:    $(INCDIR)/editor.h $(INCDIR)/output.h $(INCDIR)/buffer.h $(INCDIR)/git.h
 $(OBJDIR)/file_io.o:   $(INCDIR)/editor.h $(INCDIR)/file_io.h $(INCDIR)/buffer.h $(INCDIR)/output.h $(INCDIR)/git.h
-$(OBJDIR)/find.o:      $(INCDIR)/editor.h $(INCDIR)/find.h $(INCDIR)/input.h $(INCDIR)/output.h $(INCDIR)/buffer.h
+$(OBJDIR)/find.o:      $(INCDIR)/editor.h $(INCDIR)/find.h $(INCDIR)/input.h $(INCDIR)/output.h $(INCDIR)/buffer.h $(INCDIR)/undo.h
 $(OBJDIR)/undo.o:      $(INCDIR)/editor.h $(INCDIR)/undo.h $(INCDIR)/buffer.h $(INCDIR)/git.h $(INCDIR)/output.h

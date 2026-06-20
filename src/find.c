@@ -7,6 +7,7 @@
 #include "buffer.h"
 #include "input.h"
 #include "output.h"
+#include "undo.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -180,18 +181,18 @@ static int replace_all(const char *query, const char *replacement)
     int qlen = (int)strlen(query);
     int repl_len = replacement ? (int)strlen(replacement) : 0;
 
+    undo_begin_group();
     for (int row_idx = 0; row_idx < E.numrows; row_idx++) {
         erow *row = &E.row[row_idx];
-        if (!row->render || row->rsize <= 0) continue;
+        if (!row->chars || row->size <= 0) continue;
 
         int rpos = 0;
-        while (rpos <= row->rsize - qlen) {
-            char *match = strstr(row->render + rpos, query);
+        while (rpos <= row->size - qlen) {
+            char *match = strstr(row->chars + rpos, query);
             if (!match) break;
 
-            int match_rx = (int)(match - row->render);
-            int start_cx = buffer_rx_to_cx(row, match_rx);
-            int end_cx = buffer_rx_to_cx(row, match_rx + qlen);
+            int start_cx = (int)(match - row->chars);
+            int end_cx = start_cx + qlen;
             if (end_cx < start_cx) break;
 
             int remove_len = end_cx - start_cx;
@@ -199,22 +200,23 @@ static int replace_all(const char *query, const char *replacement)
             if (new_size > OPUSEDIT_MAX_ROW_SIZE) {
                 editor_set_status_message(
                     "Replacement would make a line too long.");
-                rpos = match_rx + qlen;
+                rpos = start_cx + qlen;
                 continue;
             }
 
             if (!replace_range_in_row(row_idx, start_cx, end_cx,
                                       replacement, repl_len)) {
-                rpos = match_rx + qlen;
+                rpos = start_cx + qlen;
                 continue;
             }
             total++;
 
             int after_cx = start_cx + repl_len;
             clamp_cursor_to_row(row_idx, &after_cx);
-            rpos = buffer_cx_to_rx(row, after_cx);
+            rpos = after_cx;
         }
     }
+    undo_end_group();
 
     return total;
 }

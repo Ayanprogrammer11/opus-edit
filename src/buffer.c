@@ -394,11 +394,14 @@ void buffer_duplicate_line(void)
         E.auto_indent = 0;
         E.cy = 0;
         E.cx = 0;
+        undo_begin_group();
         if (buffer_insert_newline() < 0) {
+            undo_end_group();
             E.auto_indent = saved_auto;
             editor_set_status_message("Duplicate failed: out of memory.");
             return;
         }
+        undo_end_group();
         E.auto_indent = saved_auto;
         E.cy = 0;
         E.cx = 0;
@@ -425,7 +428,9 @@ void buffer_duplicate_line(void)
     E.cy = row_idx;
     E.cx = row->size;
     E.auto_indent = 0;
+    undo_begin_group();
     if (buffer_insert_newline() < 0) {
+        undo_end_group();
         E.auto_indent = saved_auto;
         free(copy);
         editor_set_status_message("Duplicate failed: out of memory.");
@@ -436,6 +441,7 @@ void buffer_duplicate_line(void)
     for (int i = 0; i < len; i++) {
         buffer_insert_char(copy[i]);
     }
+    undo_end_group();
 
     if (saved_cx > len) saved_cx = len;
     E.cy = row_idx + 1;
@@ -453,6 +459,7 @@ int buffer_trim_trailing_whitespace(void)
     int saved_cx = E.cx;
     int saved_cy = E.cy;
 
+    undo_begin_group();
     for (int row_idx = 0; row_idx < E.numrows; row_idx++) {
         erow *row = &E.row[row_idx];
         while (row->size > 0) {
@@ -469,6 +476,7 @@ int buffer_trim_trailing_whitespace(void)
             }
         }
     }
+    undo_end_group();
 
     E.cy = saved_cy;
     if (E.cy < 0) E.cy = 0;

@@ -29,7 +29,8 @@ enum editor_key {
     PAGE_UP,
     PAGE_DOWN,
     MOUSE_SCROLL_UP,
-    MOUSE_SCROLL_DOWN
+    MOUSE_SCROLL_DOWN,
+    MOUSE_EVENT
 };
 
 /*

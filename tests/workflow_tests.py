@@ -51,6 +51,7 @@ CTRL_UP = b"\x1b[1;5A"
 CTRL_DOWN = b"\x1b[1;5B"
 MOUSE_SCROLL_UP = b"\x1b[<64;1;1M"
 MOUSE_SCROLL_DOWN = b"\x1b[<65;1;1M"
+MOUSE_CLICK = b"\x1b[<0;10;5M"
 
 
 class EditorSession:
@@ -358,6 +359,29 @@ def scenario_command_trim_duplicate(binary: Path, root: Path) -> None:
     assert_file(target, b"abc\nabc\n")
 
 
+def scenario_command_trim_undo_groups(binary: Path, root: Path) -> None:
+    target = root / "trim-undo.txt"
+    with EditorSession(binary, target, "trim undo groups") as ed:
+        ed.send(b"a   " + ENTER + b"b   ")
+        ed.send(ESC, pause=0.2)
+        ed.send(b":trim" + ENTER)
+        ed.send(CTRL_Z)
+        ed.send(CTRL_S + CTRL_Q)
+        ed.wait_exit()
+    assert_file(target, b"a   \nb   \n")
+
+
+def scenario_duplicate_undo_groups(binary: Path, root: Path) -> None:
+    target = root / "duplicate-undo.txt"
+    with EditorSession(binary, target, "duplicate undo groups") as ed:
+        ed.send(b"abc")
+        ed.send(CTRL_D)
+        ed.send(CTRL_Z)
+        ed.send(CTRL_S + CTRL_Q)
+        ed.wait_exit()
+    assert_file(target, b"abc\n")
+
+
 def scenario_visual_line_copy_paste(binary: Path, root: Path) -> None:
     target = root / "visual-paste.txt"
     with EditorSession(binary, target, "visual line paste") as ed:
@@ -379,6 +403,19 @@ def scenario_replace_all(binary: Path, root: Path) -> None:
         ed.send(CTRL_S + CTRL_Q)
         ed.wait_exit()
     assert_file(target, b"qux qux\nbar\n")
+
+
+def scenario_replace_all_undo_groups(binary: Path, root: Path) -> None:
+    target = root / "replace-undo.txt"
+    with EditorSession(binary, target, "replace all undo groups") as ed:
+        ed.send(b"foo foo" + ENTER + b"bar")
+        ed.send(CTRL_R)
+        ed.send(b"foo" + ENTER)
+        ed.send(b"qux" + ENTER)
+        ed.send(CTRL_Z)
+        ed.send(CTRL_S + CTRL_Q)
+        ed.wait_exit()
+    assert_file(target, b"foo foo\nbar\n")
 
 
 def scenario_search_then_insert(binary: Path, root: Path) -> None:
@@ -652,6 +689,18 @@ def scenario_replace_with_empty_string(binary: Path, root: Path) -> None:
     assert_file(target, b"ba\n")
 
 
+def scenario_replace_space_does_not_hang_on_tab(binary: Path, root: Path) -> None:
+    target = root / "replace-tab-space.txt"
+    target.write_bytes(b"\t\n")
+    with EditorSession(binary, target, "replace visual tab space") as ed:
+        ed.send(CTRL_R)
+        ed.send(b" " + ENTER)
+        ed.send(ENTER)
+        ed.send(CTRL_S + CTRL_Q)
+        ed.wait_exit()
+    assert_file(target, b"\t\n")
+
+
 def scenario_search_cancel_keeps_cursor(binary: Path, root: Path) -> None:
     target = root / "search-cancel.txt"
     with EditorSession(binary, target, "search cancel keeps cursor") as ed:
@@ -726,6 +775,19 @@ def scenario_cli_multiple_files(binary: Path, root: Path) -> None:
         ed.wait_exit()
     assert_file(first, b"?one\n")
     assert_file(second, b"!two\n")
+
+
+def scenario_cli_failed_open_does_not_keep_blank_buffer(binary: Path, root: Path) -> None:
+    good = root / "cli-good.txt"
+    bad = root / "cli-bad-dir"
+    good.write_bytes(b"good\n")
+    bad.mkdir()
+    with EditorSession(binary, [good, bad], "cli failed open rollback") as ed:
+        ed.assert_output_contains("Open failed")
+        ed.send(b"!")
+        ed.send(CTRL_S + CTRL_Q)
+        ed.wait_exit()
+    assert_file(good, b"!good\n")
 
 
 def scenario_control_bytes_ignored(binary: Path, root: Path) -> None:
@@ -989,6 +1051,17 @@ def scenario_mouse_scroll_is_non_destructive(binary: Path, root: Path) -> None:
     assert_file(target, ("\n".join(lines) + "\n").encode())
 
 
+def scenario_mouse_click_keeps_insert_mode(binary: Path, root: Path) -> None:
+    target = root / "mouse-click-insert.txt"
+    with EditorSession(binary, target, "mouse click keeps insert mode") as ed:
+        ed.send(b"abc")
+        ed.send(MOUSE_CLICK)
+        ed.send(b"X")
+        ed.send(CTRL_S + CTRL_Q)
+        ed.wait_exit()
+    assert_file(target, b"abcX\n")
+
+
 SCENARIOS = [
     scenario_basic_edit_save_quit,
     scenario_fast_escape_preserves_following_keys,
@@ -1000,8 +1073,11 @@ SCENARIOS = [
     scenario_insert_undo_removes_created_eof_row,
     scenario_newline_undo_redo,
     scenario_command_trim_duplicate,
+    scenario_command_trim_undo_groups,
+    scenario_duplicate_undo_groups,
     scenario_visual_line_copy_paste,
     scenario_replace_all,
+    scenario_replace_all_undo_groups,
     scenario_search_then_insert,
     scenario_multi_buffer_open_save,
     scenario_multi_cursor_insert,
@@ -1021,11 +1097,13 @@ SCENARIOS = [
     scenario_paste_empty_clipboard_keeps_selection,
     scenario_ctrl_clipboard_cut_paste,
     scenario_replace_with_empty_string,
+    scenario_replace_space_does_not_hang_on_tab,
     scenario_search_cancel_keeps_cursor,
     scenario_search_arrow_cycle,
     scenario_save_prompt_cancel_keeps_editing,
     scenario_open_directory_prompt_keeps_current_buffer,
     scenario_cli_multiple_files,
+    scenario_cli_failed_open_does_not_keep_blank_buffer,
     scenario_control_bytes_ignored,
     scenario_model_insert_navigation_stress,
     scenario_rapid_paste_many_lines,
@@ -1041,6 +1119,7 @@ SCENARIOS = [
     scenario_linewise_paste_undo_groups,
     scenario_linewise_paste_into_empty_buffer,
     scenario_mouse_scroll_is_non_destructive,
+    scenario_mouse_click_keeps_insert_mode,
 ]
 
 
