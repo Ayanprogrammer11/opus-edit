@@ -97,6 +97,7 @@ typedef struct editor_buffer {
     int coloff;
     /* File content */
     int   numrows;
+    int   row_capacity;
     erow *row;
     int   ends_with_newline;
     /* Status */
@@ -155,6 +156,7 @@ typedef struct editor_config {
     int   render_total_rows;
     /* File content */
     int   numrows;
+    int   row_capacity;
     erow *row;
     int   ends_with_newline;
     /* Status */

@@ -461,6 +461,7 @@ static void editor_buffer_init(editor_buffer *buf)
     buf->rowoff = 0;
     buf->coloff = 0;
     buf->numrows = 0;
+    buf->row_capacity = 0;
     buf->row = NULL;
     buf->ends_with_newline = 1;
     buf->dirty = 0;
@@ -507,6 +508,7 @@ static void editor_buffer_free(editor_buffer *buf)
     buf->row = NULL;
     buf->filename = NULL;
     buf->numrows = 0;
+    buf->row_capacity = 0;
     buf->ends_with_newline = 1;
     buf->dirty = 0;
     buf->saved_len = 0;
@@ -529,6 +531,7 @@ static void editor_buffer_snapshot(editor_buffer *buf)
     buf->rowoff = E.rowoff;
     buf->coloff = E.coloff;
     buf->numrows = E.numrows;
+    buf->row_capacity = E.row_capacity;
     buf->row = E.row;
     buf->ends_with_newline = E.ends_with_newline;
     buf->dirty = E.dirty;
@@ -561,6 +564,7 @@ static void editor_buffer_restore(editor_buffer *buf)
     E.rowoff = buf->rowoff;
     E.coloff = buf->coloff;
     E.numrows = buf->numrows;
+    E.row_capacity = buf->row_capacity;
     E.row = buf->row;
     E.ends_with_newline = buf->ends_with_newline;
     E.dirty = buf->dirty;
@@ -786,6 +790,7 @@ void editor_init(void)
         E.rowoff = 0;
         E.coloff = 0;
         E.numrows = 0;
+        E.row_capacity = 0;
         E.row = NULL;
         E.ends_with_newline = 1;
         E.dirty = 0;
@@ -830,6 +835,7 @@ void editor_cleanup(void)
     E.row = NULL;
     E.filename = NULL;
     E.numrows = 0;
+    E.row_capacity = 0;
     free(E.clipboard);
     E.clipboard = NULL;
     E.clipboard_len = 0;

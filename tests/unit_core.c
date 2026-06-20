@@ -276,6 +276,7 @@ static void test_row_rendering_and_coordinates(void)
     reset_editor_state();
     CHECK(buffer_insert_row(0, "a\tb", 3));
     CHECK_INT(E.numrows, 1);
+    CHECK(E.row_capacity >= E.numrows);
     CHECK_INT(E.row[0].size, 3);
     CHECK_STR(E.row[0].render, "a   b");
     CHECK_INT(E.row[0].rsize, 5);
@@ -285,6 +286,11 @@ static void test_row_rendering_and_coordinates(void)
     CHECK_INT(buffer_rx_to_cx(&E.row[0], -1), 0);
     CHECK_INT(buffer_rx_to_cx(&E.row[0], 4), 2);
     CHECK(!buffer_insert_row(99, "x", 1));
+
+    for (int i = 1; i < 64; i++)
+        CHECK(buffer_insert_row(i, "x", 1));
+    CHECK_INT(E.numrows, 64);
+    CHECK(E.row_capacity >= E.numrows);
 }
 
 static void test_insert_delete_undo_redo_grouping(void)

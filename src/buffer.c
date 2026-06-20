@@ -102,6 +102,29 @@ void buffer_update_row(erow *row)
 
 /* ── Row insertion ────────────────────────────────────────── */
 
+static int buffer_ensure_row_capacity(int needed)
+{
+    if (needed <= E.row_capacity) return 1;
+    if (needed < 0) return 0;
+
+    int newcap = E.row_capacity > 0 ? E.row_capacity : 8;
+    while (newcap < needed) {
+        if (newcap > INT_MAX / 2) {
+            newcap = needed;
+            break;
+        }
+        newcap *= 2;
+    }
+    if (newcap < needed) return 0;
+    if ((size_t)newcap > SIZE_MAX / sizeof(erow)) return 0;
+
+    erow *newrows = realloc(E.row, sizeof(erow) * (size_t)newcap);
+    if (!newrows) return 0;
+    E.row = newrows;
+    E.row_capacity = newcap;
+    return 1;
+}
+
 int buffer_insert_row(int at, const char *s, size_t len)
 {
     if (at < 0 || at > E.numrows) return 0;
@@ -118,16 +141,10 @@ int buffer_insert_row(int at, const char *s, size_t len)
     if (len > 0) memcpy(chars, s, len);
     chars[len] = '\0';
 
-    if ((size_t)(E.numrows + 1) > SIZE_MAX / sizeof(erow)) {
+    if (!buffer_ensure_row_capacity(E.numrows + 1)) {
         free(chars);
         return 0;
     }
-    erow *newrows = realloc(E.row, sizeof(erow) * (size_t)(E.numrows + 1));
-    if (!newrows) {
-        free(chars);
-        return 0;
-    }
-    E.row = newrows;
 
     memmove(&E.row[at + 1], &E.row[at],
             sizeof(erow) * (size_t)(E.numrows - at));

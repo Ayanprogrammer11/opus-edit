@@ -40,6 +40,7 @@ static void file_reset_buffer_state(void)
     free(E.row);
     E.row = NULL;
     E.numrows = 0;
+    E.row_capacity = 0;
     E.ends_with_newline = 1;
     E.dirty = 0;
     E.saved_len = 0;
@@ -116,26 +117,39 @@ static int file_make_loaded_row(erow *row, int idx, const char *s, size_t len)
 }
 
 static int file_append_loaded_row(erow **rows, int *count,
+                                  int *capacity,
                                   const char *s, size_t len)
 {
-    if (!rows || !count) return 0;
+    if (!rows || !count || !capacity) return 0;
     if (*count == INT_MAX) return 0;
 
     erow row;
     if (!file_make_loaded_row(&row, *count, s, len))
         return 0;
 
-    if ((size_t)(*count + 1) > SIZE_MAX / sizeof(erow)) {
-        buffer_free_row(&row);
-        return 0;
-    }
-    erow *tmp = realloc(*rows, (size_t)(*count + 1) * sizeof(erow));
-    if (!tmp) {
-        buffer_free_row(&row);
-        return 0;
+    if (*count >= *capacity) {
+        int newcap = *capacity > 0 ? *capacity : 128;
+        while (newcap <= *count) {
+            if (newcap > INT_MAX / 2) {
+                newcap = *count + 1;
+                break;
+            }
+            newcap *= 2;
+        }
+        if (newcap <= *count
+            || (size_t)newcap > SIZE_MAX / sizeof(erow)) {
+            buffer_free_row(&row);
+            return 0;
+        }
+        erow *tmp = realloc(*rows, (size_t)newcap * sizeof(erow));
+        if (!tmp) {
+            buffer_free_row(&row);
+            return 0;
+        }
+        *rows = tmp;
+        *capacity = newcap;
     }
 
-    *rows = tmp;
     (*rows)[*count] = row;
     (*count)++;
     return 1;
@@ -176,6 +190,7 @@ int file_open(const char *filename)
 
     erow *loaded_rows = NULL;
     int loaded_count = 0;
+    int loaded_capacity = 0;
     int loaded_ends_with_newline = exists ? 0 : 1;
     char  *line    = NULL;
     size_t linecap = 0;
@@ -199,6 +214,7 @@ int file_open(const char *filename)
             }
 
             if (!file_append_loaded_row(&loaded_rows, &loaded_count,
+                                        &loaded_capacity,
                                         line, (size_t)linelen)) {
                 editor_set_status_message("Open failed: out of memory.");
                 free(line);
@@ -235,6 +251,7 @@ int file_open(const char *filename)
     E.filename = copy;
     E.row = loaded_rows;
     E.numrows = loaded_count;
+    E.row_capacity = loaded_capacity;
     E.ends_with_newline = loaded_ends_with_newline;
     editor_mark_saved();
     output_invalidate_wrap_cache();
